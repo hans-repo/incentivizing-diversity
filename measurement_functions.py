@@ -2,6 +2,45 @@ import matplotlib.pyplot as plt
 import math
 import numpy as np
 
+def plot_multiple_experiment_results(experiment_indices, metrics, metric_name, y_label=None, title=None, ylim=None):
+    """
+    Plot metrics across multiple experiments.
+    
+    Args:
+        experiment_indices: List of experiment indices (x-axis)
+        metrics: List of metric values to plot
+        metric_name: Name of the metric for the legend
+        y_label: Label for y-axis
+        title: Plot title
+        ylim: Optional tuple for y-axis limits (min, max)
+    """
+    plt.figure(figsize=(10, 6))
+    plt.plot(experiment_indices, metrics, 'o-', linewidth=2, markersize=8)
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.xlabel('Experiment Number')
+    plt.ylabel(y_label if y_label else metric_name)
+    plt.title(title if title else f'{metric_name} Across Experiments')
+    
+    # Add values as text above points
+    for i, value in enumerate(metrics):
+        plt.annotate(f'{value:.4f}', 
+                    (experiment_indices[i], value),
+                    textcoords="offset points", 
+                    xytext=(0, 10), 
+                    ha='center')
+    
+    # Set y-axis limits if provided
+    if ylim:
+        plt.ylim(ylim)
+        
+    # Ensure x-axis shows all experiment numbers
+    plt.xticks(experiment_indices)
+    
+    # Optimize for display
+    plt.tight_layout()
+    
+    return plt
+
 def plot_stacked_area(agents_history, epochs, possible_states):
     """
     Plot a stacked area chart showing the distribution of agents across states over time.
@@ -376,7 +415,13 @@ def measure_dual_phase_convergence(diversity_values, transition_epoch,
         if transition_epoch > 0 and len(phase2_values) > 0:
             before_change = diversity_values[transition_epoch-1]
             after_change = diversity_values[transition_epoch]
-            results['overall']['adaptation_shock'] = (before_change - after_change) / before_change
+            
+            # Fix: Handle division by zero case
+            if before_change > 0:
+                results['overall']['adaptation_shock'] = (before_change - after_change) / before_change
+            else:
+                # If before_change is 0, we can't calculate a meaningful percentage drop
+                results['overall']['adaptation_shock'] = 0 if after_change == 0 else 1
         
         # Find when system reaches target in phase 2
         for epoch, diversity in enumerate(phase2_values):
@@ -426,7 +471,11 @@ def analyze_system_adaptability(diversity_values, transition_epoch, ideal_before
     initial_drop = None
     if len(phase2_values) > 0:
         drop = pre_change_avg - phase2_values[0]
-        initial_drop = drop / pre_change_avg
+        # Fix: Handle division by zero
+        if pre_change_avg > 0:
+            initial_drop = drop / pre_change_avg
+        else:
+            initial_drop = 0 if phase2_values[0] == 0 else 1
     
     # Time to recover from drop
     recovery_time = None
@@ -451,18 +500,24 @@ def analyze_system_adaptability(diversity_values, transition_epoch, ideal_before
     if len(phase2_values) > settling_window:
         for i in range(len(phase2_values) - settling_window):
             window = phase2_values[i:i+settling_window]
+            # Fix: Handle zero values in the window
             avg = sum(window) / len(window)
-            variation = max(abs(v - avg) / avg for v in window)
-            
-            if variation < settling_threshold:
-                settling_time = i
-                break
+            if avg > 0:
+                variation = max(abs(v - avg) / avg for v in window)
+                
+                if variation < settling_threshold:
+                    settling_time = i
+                    break
     
     # Calculate final adaptation quality
     final_periods = min(20, len(phase2_values))
     if final_periods > 0:
         final_avg = sum(phase2_values[-final_periods:]) / final_periods
-        adaptation_quality = final_avg / ideal_after
+        # Fix: Handle division by zero
+        if ideal_after > 0:
+            adaptation_quality = final_avg / ideal_after
+        else:
+            adaptation_quality = 0
     else:
         adaptation_quality = None
         

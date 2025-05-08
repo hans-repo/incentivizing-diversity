@@ -3,12 +3,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from agent import *
 from measurement_functions import *
-from ziegler_nichols_tuning import *
+from reinforcement_learning import *
 
 # Configuration for the experiment
-num_experiments = 1 # Change this value to run multiple experiments
-NUM_ATTRIBUTES = 1  # Simplified for clarity
-
+num_experiments = 1  # Change this value to run multiple experiments
+NUM_ATTRIBUTES = 1   # Simplified for clarity
 
 def main():
     # Initialize arrays for storing metrics across experiments
@@ -20,21 +19,16 @@ def main():
     
     # Track experiment-specific metrics
     x_axis = []  # Experiment numbers for x-axis
-    all_pid_params = []  # Store all PID parameters
     adaptation_metrics = []  # Store adaptation quality across experiments
     recovery_times = []  # Store recovery times across experiments
     phase1_convergence_times = []  # Convergence times for phase 1
     phase2_convergence_times = []  # Convergence times for phase 2
     
-    # Variables to store tuned PID parameters from the first experiment
-    tuned_pid_params = None
-    # tuned_pid_params = (100, 10, 10)
-    
     for i in range(num_experiments):
         print(f"\n\n{'='*50}")
         print(f"STARTING EXPERIMENT {i+1}/{num_experiments}")
         print(f"{'='*50}\n")
-        epochs = 3000 # Total epochs
+        epochs = 3000  # Total epochs
         
         # Define the possible states an agent can be in
         INITIAL_STATES = ['NO_STATE', 'State_A', 'State_B', 'State_C', 'State_D']
@@ -50,11 +44,7 @@ def main():
         # Define fixed rewards for each state
         BASE_REWARDS = PER_NODE_REWARD_BASE * N_AGENTS / (NUM_STATES-1)  # -1 for NO_STATE
         
-        # Initial PID values (will be replaced by tuning or reused from first experiment)
-        REWARDS_ADAPTIVE_PARAM = 1000  # Initial P value before tuning
-        REWARDS_INTEGRAL_PARAM = 100   # Initial I value before tuning
-        REWARDS_DERIVATIVE_PARAM = 100 # Initial D value before tuning
-        
+        # Setup for agent costs
         BASE_RUN_COST = 100 + 0
         RUN_COST_CEILING = BASE_RUN_COST + 2*BASE_RUN_COST + BASE_RUN_COST*0
         BASE_SWITCH_COST = BASE_RUN_COST
@@ -77,40 +67,16 @@ def main():
         
         x_axis.append(i+1)  # Store experiment number (starting from 1 for better readability)
         
-        # Initialize state rewards and accumulated error
-        state_rewards = [{state: 0 for state in POSSIBLE_STATES} for _ in range(NUM_ATTRIBUTES)]
-        accumulated_error = [{state: 0 for state in POSSIBLE_STATES} for _ in range(NUM_ATTRIBUTES)]
-        last_error = [{state: 0 for state in POSSIBLE_STATES} for _ in range(NUM_ATTRIBUTES)]
+        # Initialize RL agent for learning reward allocation
+        reward_learner = RewardLearner(INITIAL_STATES, N_AGENTS, reward_scale=PER_NODE_REWARD_BASE)
         
-        # Pre-add the new state to rewards and error tracking, but make it unattractive
+        # Initialize state rewards
+        state_rewards = [{state: 0 for state in POSSIBLE_STATES} for _ in range(NUM_ATTRIBUTES)]
+        
+        # Pre-add the new state to rewards tracking, but make it unattractive
         for k in range(NUM_ATTRIBUTES):
             # Set initial reward very low to ensure zero initial adoption
             state_rewards[k][NEW_STATE_NAME] = 0  # No reward initially
-            accumulated_error[k][NEW_STATE_NAME] = 0
-            last_error[k][NEW_STATE_NAME] = 0
-
-        
-        # Only run Ziegler-Nichols tuning for the first experiment
-        # For subsequent experiments, reuse the tuned parameters
-        if i == 0 and tuned_pid_params is None:
-            print("\n=== Running Ziegler-Nichols tuning for experiment", i+1, "===")
-            REWARDS_ADAPTIVE_PARAM, REWARDS_INTEGRAL_PARAM, REWARDS_DERIVATIVE_PARAM = ziegler_nichols_tuning(
-                None, INITIAL_STATES, BASE_REWARDS, epochs=epochs, n_agents=N_AGENTS)
-            
-            # Store the tuned parameters for subsequent experiments
-            tuned_pid_params = (REWARDS_ADAPTIVE_PARAM, REWARDS_INTEGRAL_PARAM, REWARDS_DERIVATIVE_PARAM)
-        else:
-            # Reuse previously tuned PID parameters
-            print(f"\n=== Reusing PID parameters from first experiment for experiment {i+1} ===")
-            REWARDS_ADAPTIVE_PARAM, REWARDS_INTEGRAL_PARAM, REWARDS_DERIVATIVE_PARAM = tuned_pid_params
-        
-        # Store the PID parameters used for this experiment
-        all_pid_params.append((REWARDS_ADAPTIVE_PARAM, REWARDS_INTEGRAL_PARAM, REWARDS_DERIVATIVE_PARAM))
-        
-        print("\n=== Using PID parameters: ===")
-        print(f"P: {REWARDS_ADAPTIVE_PARAM}")
-        print(f"I: {REWARDS_INTEGRAL_PARAM}")
-        print(f"D: {REWARDS_DERIVATIVE_PARAM}")
         
         # Create initial agents with only initial states
         agents = generate_agents(N_AGENTS, INITIAL_STATES, state_rewards, STATE_RUN_COSTS, STATE_SWITCH_COSTS, SWITCH_FREQUENCY_PARAM)
@@ -120,8 +86,13 @@ def main():
         # Track states available at each epoch for proper diversity calculation
         states_available_at_epoch = []
         
+        # Track RL metrics for analysis
+        exploration_rates = []  # Average exploration rate across all states
+        rewards_history = []    # Environment rewards from reward calculation
+        training_losses = []    # Training losses from DQN agents
+        
         # Run the main experiment
-        print("\n=== Starting main experiment ===")
+        print("\n=== Starting main RL experiment ===")
         for epoch in range(epochs):
             # Add the new state at the specified epoch
             if epoch == NEW_STATE_EPOCH:
@@ -131,8 +102,8 @@ def main():
                 # Reset the switch cost for the new state to normal level
                 STATE_SWITCH_COSTS[NEW_STATE_NAME] = BASE_SWITCH_COST
                 
-                # Initialize the new state with normal reward based on new state count
-                BASE_REWARDS_NEW = PER_NODE_REWARD_BASE * N_AGENTS / (len(POSSIBLE_STATES)-1)
+                # Update reward learner to include the new state
+                reward_learner.update_possible_states(POSSIBLE_STATES)
                 
                 # Update agents to know about the new state
                 for agent in agents:
@@ -142,21 +113,8 @@ def main():
                     # Set normal switch cost for the new state
                     agent.switch_cost[NEW_STATE_NAME] = random.uniform(0.0, 1.0) * agent.personal_switch_cost
                 
-                # Update state rewards to account for the new state
-                for k in range(NUM_ATTRIBUTES):
-                    # Set new state's reward to normal value
-                    state_rewards[k][NEW_STATE_NAME] = 0
-                    
-                    # Adjust all states' rewards proportionally
-                    for state in POSSIBLE_STATES:
-                        if state != 'NO_STATE':
-                            # We've already set NEW_STATE_NAME appropriately above
-                            if state != NEW_STATE_NAME:
-                                state_rewards[k][state] = state_rewards[k][state] * (NUM_STATES-1) / (len(POSSIBLE_STATES)-1)
-                
                 # Print info about the new state
                 print(f"New state added: {NEW_STATE_NAME}")
-                print(f"Updated BASE_REWARDS: {BASE_REWARDS_NEW}")
                 print(f"Total states now: {len(POSSIBLE_STATES)}")
                 print(f"Switch cost for {NEW_STATE_NAME}: {STATE_SWITCH_COSTS[NEW_STATE_NAME]}")
             
@@ -164,12 +122,15 @@ def main():
             current_states = INITIAL_STATES.copy() if epoch < NEW_STATE_EPOCH else POSSIBLE_STATES.copy()
             states_available_at_epoch.append(current_states)
                 
-            # Update rewards based on current state distribution
-            state_rewards, accumulated_error, last_error = update_state_rewards(
-                agents, current_states, state_rewards, accumulated_error, last_error, 
-                REWARDS_ADAPTIVE_PARAM, REWARDS_INTEGRAL_PARAM, REWARDS_DERIVATIVE_PARAM)
+            # Get rewards from RL agent based on current state distribution
+            # Use the new update_state_rewards function similar to PID version in agent.py
+            current_rewards, accumulated_error, last_error = reward_learner.update_state_rewards(agents)
             
-            state_rewards_last_epoch = distribute_rewards(agents, current_states, state_rewards)
+            # Format the rewards to match the expected format in the simulation
+            state_rewards = reward_learner.format_state_rewards(current_rewards, NUM_ATTRIBUTES)
+            
+            # Distribute rewards to agents
+            state_rewards_last_epoch = distribute_rewards_rl(agents, current_states, state_rewards)
             
             # Record states of all agents
             for k in range(NUM_ATTRIBUTES):
@@ -179,6 +140,21 @@ def main():
             # Update agent decisions
             for agent in agents:
                 agent.decision(state_rewards_last_epoch, malicious=False)
+            
+            # Record RL metrics
+            # Get average exploration rate across all state agents
+            state_epsilons = reward_learner.get_exploration_rates()
+            avg_epsilon = sum(state_epsilons.values()) / len(state_epsilons) if state_epsilons else 0
+            exploration_rates.append(avg_epsilon)
+            
+            # Calculate and store environment reward
+            env_reward, _ = reward_learner.env.calculate_reward()
+            rewards_history.append(env_reward)
+            
+            # Track training losses if available
+            if hasattr(reward_learner, 'training_losses') and reward_learner.training_losses:
+                if len(reward_learner.training_losses) > len(training_losses):
+                    training_losses.append(reward_learner.training_losses[-1])
                 
             # Print status at key epochs
             if epoch % 100 == 0 or epoch == NEW_STATE_EPOCH or epoch == NEW_STATE_EPOCH + 1:
@@ -189,8 +165,19 @@ def main():
                 
                 print(f"Epoch {epoch} - Agents per state: {state_counts}")
                 print(f"Epoch {epoch} - Rewards per state: {state_rewards_last_epoch}")
-                print(f"accumulated error : {accumulated_error}")
-                print(f"last error : {last_error}")
+                print(f"Average exploration rate: {avg_epsilon:.4f}")
+                print(f"Environment reward: {env_reward:.4f}")
+                
+                # Print some reward values for key states
+                reward_samples = {state: current_rewards[state] for state in list(current_states)[:3] if state != 'NO_STATE'}
+                print(f"Sample rewards: {reward_samples}")
+                
+                # Print training progress
+                if training_losses:
+                    recent_losses = training_losses[-min(10, len(training_losses)):]
+                    avg_loss = sum(recent_losses) / len(recent_losses)
+                    print(f"Recent training loss avg: {avg_loss:.6f}")
+                
                 # Calculate and print current diversity
                 if epoch > 0:  # Skip first epoch
                     temp_diversity = calculate_diversity([agents_declared_history[0]], [epoch-1], 
@@ -275,6 +262,34 @@ def main():
     if num_experiments == 1:
         epochs_list = list(range(epochs))
         
+        # Print summary statistics
+        print("\n=== REINFORCEMENT LEARNING EXPERIMENT RESULTS ===")
+        print(f"Final average diversity (last 25%): {average_diversity_by_experiment[0][0]:.4f}")
+        print(f"Final largest state share: {largest_state_all_experiments[0][0]:.2%}")
+        print(f"Phase 1 convergence time: {phase1_convergence_times[0]} epochs")
+        print(f"Phase 2 convergence time: {phase2_convergence_times[0]} epochs")
+        print(f"Recovery time: {recovery_times[0]} epochs")
+        print(f"Final adaptation quality: {adaptation_metrics[0]*100:.1f}% of ideal")
+        print(f"Final average exploration rate (epsilon): {exploration_rates[-1]:.4f}")
+        print(f"Final RL reward: {rewards_history[-1]:.4f}")
+        
+        # Print training performance
+        if training_losses:
+            print(f"Final training loss: {training_losses[-1]:.6f}")
+            print(f"Training loss improvement: {(training_losses[0] - training_losses[-1]) / training_losses[0]:.2%}")
+        
+        # Plot training loss over time
+        if training_losses:
+            plt.figure(figsize=(10, 6))
+            plt.plot(training_losses, linewidth=1, alpha=0.8)
+            plt.title('DQN Training Loss Over Time')
+            plt.xlabel('Training Updates')
+            plt.ylabel('Loss')
+            plt.yscale('log')  # Log scale often better for visualizing loss
+            plt.grid(True, linestyle='--', alpha=0.7)
+            plt.tight_layout()
+            plt.show()
+        
         # Plot diversity over time
         plt.figure(figsize=(12, 7))
         for k in range(NUM_ATTRIBUTES):
@@ -296,22 +311,25 @@ def main():
         
         plt.xlabel('Epochs')
         plt.ylabel('Diversity')
-        plt.title(f'Diversity with PID (P={REWARDS_ADAPTIVE_PARAM:.1f}, I={REWARDS_INTEGRAL_PARAM:.1f}, D={REWARDS_DERIVATIVE_PARAM:.1f})')
+        plt.title('Diversity with Reinforcement Learning')
         plt.legend(loc='lower right')
         plt.grid(True, linestyle='--', alpha=0.5)
+        plt.show()
+
+        # Plot RL metrics
+        plot_exploration_rate(exploration_rates, epochs)
+        plt.show()
+        
+        plot_rl_rewards(rewards_history, epochs)
         plt.show()
         
         print("\n=== Final Results ===")
         print("Final states in system:", POSSIBLE_STATES)
-        print("Rewards per state at the end:", state_rewards_last_epoch)
         print("Initial base rewards:", BASE_REWARDS)
         print(f"Final ideal diversity ({len(POSSIBLE_STATES)-1} states):", ideal_after)
-        print(f"PID parameters used: P={REWARDS_ADAPTIVE_PARAM:.2f}, I={REWARDS_INTEGRAL_PARAM:.2f}, D={REWARDS_DERIVATIVE_PARAM:.2f}")
         
         # After your experiment runs:
         diversity_values = [final_diversity[0][epoch][0] for epoch in range(epochs)]
-        ideal_before = get_ideal_diversity(INITIAL_STATES)
-        ideal_after = get_ideal_diversity(POSSIBLE_STATES)
 
         # Print convergence analysis with better formatting
         print("\n" + "="*50)
@@ -322,10 +340,6 @@ def main():
         print(f"   • Initial phase (4 states): {ideal_before:.4f} bits")
         print(f"   • Final phase (5 states):   {ideal_after:.4f} bits")
         print(f"   • State transition occurred at epoch {NEW_STATE_EPOCH}")
-
-        # Analyze convergence in both phases
-        convergence_results = measure_dual_phase_convergence(
-            diversity_values, NEW_STATE_EPOCH, ideal_before, ideal_after, 0.9)
 
         # Format Phase 1 results
         print("\n📈 PHASE 1 CONVERGENCE (EPOCHS 0-{})".format(NEW_STATE_EPOCH-1))
@@ -403,8 +417,6 @@ def main():
             
         print("\n" + "="*50)
 
-
-        
         # Plot stacked area chart showing agent distribution
         for k in range(NUM_ATTRIBUTES):
             plt.figure(figsize=(12, 7))
@@ -417,149 +429,11 @@ def main():
             plt.axvline(x=NEW_STATE_EPOCH, color='r', linestyle='--', 
                       label=f"New state ({NEW_STATE_NAME}) added")
             
-            plt.title(f"Agent Distribution Over Time with PID Controller")
+            plt.title(f"Agent Distribution Over Time with RL Controller")
             plt.legend(loc='upper right')
             plt.tight_layout()
             plt.show()
-    # For multiple experiments, create summary plots with experiment number as x-axis
-    else:
-        print("\n\n" + "="*60)
-        print(f"{'':^10}SUMMARY RESULTS FOR {num_experiments} EXPERIMENTS{'':^10}")
-        print("="*60)
-        
-        # Print average metrics across all experiments
-        for k in range(NUM_ATTRIBUTES):
-            avg_diversity = sum(average_diversity_by_experiment[k]) / num_experiments
-            avg_largest_state = sum(largest_state_all_experiments[k]) / num_experiments
-            
-            print(f"\nAttribute {k} Results:")
-            print(f"  • Average diversity (last 25% of epochs): {avg_diversity:.4f} bits")
-            print(f"  • Average largest state share: {avg_largest_state:.2%}")
-            
-            ideal_div = sum(ideal_diversity_all_experiments[k]) / num_experiments
-            print(f"  • Average ideal diversity: {ideal_div:.4f} bits")
-            print(f"  • Average diversity achieved: {(avg_diversity/ideal_div)*100:.1f}% of ideal")
-        
-        # Print adaptation metrics
-        avg_adaptation = sum(adaptation_metrics) / num_experiments
-        avg_recovery = sum(recovery_times) / num_experiments
-        avg_p1_conv = sum(phase1_convergence_times) / num_experiments
-        avg_p2_conv = sum(phase2_convergence_times) / num_experiments
-        
-        print("\nSystem Adaptation Metrics:")
-        print(f"  • Average adaptation quality: {avg_adaptation*100:.1f}% of ideal")
-        print(f"  • Average recovery time: {avg_recovery:.1f} epochs")
-        print(f"  • Average Phase 1 convergence time: {avg_p1_conv:.1f} epochs")
-        print(f"  • Average Phase 2 convergence time: {avg_p2_conv:.1f} epochs")
-        
-        # Create and display plots
-        print("\nGenerating summary plots...")
-        
-        # 1. Plot average diversity across experiments
-        plt.figure(figsize=(10, 6))
-        for k in range(NUM_ATTRIBUTES):
-            plt.plot(x_axis, average_diversity_by_experiment[k], 'o-', 
-                    linewidth=2, label=f"Attribute {k}")
-        plt.xlabel('Experiment Number')
-        plt.ylabel('Average Diversity (last 25% of epochs)')
-        plt.title('Diversity Across Experiments')
-        plt.grid(True, linestyle='--', alpha=0.7)
-        plt.legend()
-        plt.xticks(x_axis)
-        plt.ylim(0, ideal_div+0.2)
-        plt.tight_layout()
-        plt.show()
-        
-        # 2. Plot adaptation quality across experiments
-        plot_multiple_experiment_results(
-            x_axis, adaptation_metrics, 
-            "Adaptation Quality", 
-            y_label="Adaptation Quality (% of ideal)",
-            title="System Adaptation Quality Across Experiments",
-            ylim=(0, 1)
-        )
-        plt.show()
-        
-        # 3. Plot recovery time across experiments
-        plot_multiple_experiment_results(
-            x_axis, recovery_times, 
-            "Recovery Time", 
-            y_label="Recovery Time (epochs)",
-            title="System Recovery Time Across Experiments"
-        )
-        plt.show()
-        
-        # 4. Plot convergence times
-        plt.figure(figsize=(12, 6))
-        plt.plot(x_axis, phase1_convergence_times, 'o-', label='Phase 1 Convergence Time', 
-                linewidth=2, markersize=8, color='blue')
-        plt.plot(x_axis, phase2_convergence_times, 'o-', label='Phase 2 Convergence Time', 
-                linewidth=2, markersize=8, color='green')
-        plt.xlabel('Experiment Number')
-        plt.ylabel('Convergence Time (epochs)')
-        plt.title('System Convergence Times Across Experiments')
-        plt.grid(True, linestyle='--', alpha=0.7)
-        plt.legend()
-        plt.xticks(x_axis)
-        
-        # Add values as annotations
-        for i in range(len(x_axis)):
-            plt.annotate(f'{phase1_convergence_times[i]}', 
-                        (x_axis[i], phase1_convergence_times[i]),
-                        textcoords="offset points", xytext=(0, 10), ha='center', color='blue')
-            plt.annotate(f'{phase2_convergence_times[i]}', 
-                        (x_axis[i], phase2_convergence_times[i]),
-                        textcoords="offset points", xytext=(0, -15), ha='center', color='green')
-        
-        plt.tight_layout()
-        plt.show()
-        
-        # 5. Plot PID parameters
-        plt.figure(figsize=(14, 7))
-        p_values = [params[0] for params in all_pid_params]
-        i_values = [params[1] for params in all_pid_params]
-        d_values = [params[2] for params in all_pid_params]
-        
-        plt.subplot(1, 3, 1)
-        plt.plot(x_axis, p_values, 'o-', color='red', linewidth=2, markersize=8)
-        plt.title('P Parameter')
-        plt.xlabel('Experiment Number')
-        plt.ylabel('Value')
-        plt.grid(True, alpha=0.7)
-        plt.xticks(x_axis)
-        
-        plt.subplot(1, 3, 2)
-        plt.plot(x_axis, i_values, 'o-', color='green', linewidth=2, markersize=8)
-        plt.title('I Parameter')
-        plt.xlabel('Experiment Number')
-        plt.grid(True, alpha=0.7)
-        plt.xticks(x_axis)
-        
-        plt.subplot(1, 3, 3)
-        plt.plot(x_axis, d_values, 'o-', color='blue', linewidth=2, markersize=8)
-        plt.title('D Parameter')
-        plt.xlabel('Experiment Number')
-        plt.grid(True, alpha=0.7)
-        plt.xticks(x_axis)
-        
-        plt.suptitle('PID Parameters Across Experiments', fontsize=16)
-        plt.tight_layout()
-        plt.show()
-        
-        # 6. Plot largest state metric
-        plt.figure(figsize=(10, 6))
-        for k in range(NUM_ATTRIBUTES):
-            plt.plot(x_axis, largest_state_all_experiments[k], 'o-', 
-                    linewidth=2, label=f"Attribute {k}")
-        plt.xlabel('Experiment Number')
-        plt.ylabel('Largest State Share')
-        plt.title('Largest State Metric Across Experiments')
-        plt.grid(True, linestyle='--', alpha=0.7)
-        plt.legend()
-        plt.ylim(0,1)
-        plt.xticks(x_axis)
-        plt.tight_layout()
-        plt.show()
+
         
 if __name__ == "__main__":
     main()

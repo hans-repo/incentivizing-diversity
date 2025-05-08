@@ -1,7 +1,7 @@
 import random
 
 class Agent:
-    def __init__(self, id, possible_states, state_rewards, state_run_costs, state_switch_costs):
+    def __init__(self, id, possible_states, state_rewards, state_run_costs, state_switch_costs, switch_frequency_param):
         self.id = id
         self.possible_states = possible_states.copy()  # Make a copy to avoid reference issues
         self.state_rewards = state_rewards  # Pass state rewards
@@ -22,7 +22,9 @@ class Agent:
                            for state in state_switch_costs.keys()}
         
         self.epochs_since_last_change = [0 for _ in range(NUM_ATTRIBUTES)]  # Track epochs since last state change
-        self.switch_threshold = [random.randint(1, 25) for _ in range(NUM_ATTRIBUTES)]  # Randomly chosen threshold for switching
+        # self.switch_threshold = [random.randint(1, switch_frequency_param) for _ in range(NUM_ATTRIBUTES)]  # Randomly chosen threshold for switching
+        self.switch_threshold = [random.random()*switch_frequency_param for _ in range(NUM_ATTRIBUTES)]
+        self.switch_cooldown = [random.randint(1, 10) for _ in range(NUM_ATTRIBUTES)]
 
     def decision(self, state_rewards_last_epoch, malicious=False):
         for k in range(len(self.declared_state)):
@@ -31,7 +33,7 @@ class Agent:
             # Calculate net gains for all current possible states
             for state in self.possible_states:
                 if state == 'NO_STATE':
-                    continue  # Skip NO_STATE as it's not a valid choice
+                    net_gains[state] = 0
                     
                 if state == self.real_state[k]:
                     # Already in this state, just pay run cost
@@ -43,24 +45,39 @@ class Agent:
                                         self.state_run_costs.get(state, 0) -
                                         switch_cost)
             
-            # Skip decision if no valid states are available
-            if not net_gains:
-                continue
                 
             best_state = random_max(net_gains, key=net_gains.get)
             current_gain = net_gains.get(self.declared_state[k], float('-inf'))
             
-            # Check if it's worth switching and if we've waited long enough
-            if net_gains[best_state] > current_gain and self.epochs_since_last_change[k] >= self.switch_threshold[k]:
+            # # Check if it's worth switching and if we've waited long enough
+            if net_gains[best_state] < 0:
+                self.real_state[k] = 'NO_STATE'
+                self.declared_state[k] = 'NO_STATE'
+                self.epochs_since_last_change[k] = 0  # Reset the counter after switching
+            elif net_gains[best_state] > current_gain + abs(current_gain)*self.switch_threshold[k] and self.epochs_since_last_change[k] >= self.switch_cooldown[k]:
                 # Switch state and reset the counter
                 self.real_state[k] = best_state
                 self.declared_state[k] = best_state
                 self.epochs_since_last_change[k] = 0  # Reset the counter after switching
-            elif net_gains[best_state] > current_gain and self.epochs_since_last_change[k] < self.switch_threshold[k]:
+            elif net_gains[best_state] > current_gain + abs(current_gain)*self.switch_threshold[k] and self.epochs_since_last_change[k] < self.switch_cooldown[k]:
                 # Increment the counter if no switch is made
                 self.epochs_since_last_change[k] += 1
             else:
                 self.epochs_since_last_change[k] = 0
+
+            # # Check if it's worth switching and new gains are higher than current + threshold
+            # if net_gains[best_state] < 0:
+            #     self.real_state[k] = 'NO_STATE'
+            #     self.declared_state[k] = 'NO_STATE'
+            #     self.epochs_since_last_change[k] = 0  # Reset the counter after switching
+            # if net_gains[best_state] > current_gain + abs(current_gain)*self.switch_threshold[k]:
+            #     # Switch state and reset the counter
+            #     self.real_state[k] = best_state
+            #     self.declared_state[k] = best_state
+            #     self.epochs_since_last_change[k] = 0  # Reset the counter after switching
+            # else:
+            #     # Increment the counter if no switch is made
+            #     self.epochs_since_last_change[k] += 1
 
             if malicious:
                 total_cost = {}
@@ -138,8 +155,8 @@ def random_max(iterable, key=None):
     return random.choice(max_elements)
 
 
-def generate_agents(n, possible_states, state_rewards, state_run_costs, state_switch_costs):
-    return [Agent(i, possible_states, state_rewards, state_run_costs, state_switch_costs) for i in range(n)]
+def generate_agents(n, possible_states, state_rewards, state_run_costs, state_switch_costs, switch_frequency_param):
+    return [Agent(i, possible_states, state_rewards, state_run_costs, state_switch_costs, switch_frequency_param) for i in range(n)]
 
 
 def update_state_rewards(agents, possible_states, state_rewards, accumulated_error, last_error, adaptive_param, integral_param, derivative_param):
@@ -157,9 +174,10 @@ def update_state_rewards(agents, possible_states, state_rewards, accumulated_err
                 accumulated_error[k][state] = accumulated_error[k][state] + error
                 P_term = adaptive_param*error
                 I_term = integral_param*accumulated_error[k][state]
-                D_term = derivative_param * (error - last_error)
-                state_rewards[k][state] = state_rewards[k][state] + P_term + I_term + D_term
-    return state_rewards, accumulated_error, error
+                D_term = derivative_param * (error - last_error[k][state])
+                state_rewards[k][state] = P_term + I_term + D_term
+                last_error[k][state] = error
+    return state_rewards, accumulated_error, last_error
 
 
 def distribute_rewards(agents, possible_states, state_rewards):
