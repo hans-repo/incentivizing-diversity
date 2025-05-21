@@ -50,6 +50,7 @@ class Agent:
             current_gain = net_gains.get(self.declared_state[k], float('-inf'))
             
             # # Check if it's worth switching and if we've waited long enough
+            
             if net_gains[best_state] < 0:
                 self.real_state[k] = 'NO_STATE'
                 self.declared_state[k] = 'NO_STATE'
@@ -62,22 +63,12 @@ class Agent:
             elif net_gains[best_state] > current_gain + abs(current_gain)*self.switch_threshold[k] and self.epochs_since_last_change[k] < self.switch_cooldown[k]:
                 # Increment the counter if no switch is made
                 self.epochs_since_last_change[k] += 1
+            elif net_gains[self.real_state[k]]<0:
+                self.real_state[k] = 'NO_STATE'
+                self.declared_state[k] = 'NO_STATE'
+                self.epochs_since_last_change[k] = 0
             else:
                 self.epochs_since_last_change[k] = 0
-
-            # # Check if it's worth switching and new gains are higher than current + threshold
-            # if net_gains[best_state] < 0:
-            #     self.real_state[k] = 'NO_STATE'
-            #     self.declared_state[k] = 'NO_STATE'
-            #     self.epochs_since_last_change[k] = 0  # Reset the counter after switching
-            # if net_gains[best_state] > current_gain + abs(current_gain)*self.switch_threshold[k]:
-            #     # Switch state and reset the counter
-            #     self.real_state[k] = best_state
-            #     self.declared_state[k] = best_state
-            #     self.epochs_since_last_change[k] = 0  # Reset the counter after switching
-            # else:
-            #     # Increment the counter if no switch is made
-            #     self.epochs_since_last_change[k] += 1
 
             if malicious:
                 total_cost = {}
@@ -159,17 +150,21 @@ def generate_agents(n, possible_states, state_rewards, state_run_costs, state_sw
     return [Agent(i, possible_states, state_rewards, state_run_costs, state_switch_costs, switch_frequency_param) for i in range(n)]
 
 
-def update_state_rewards(agents, possible_states, state_rewards, accumulated_error, last_error, adaptive_param, integral_param, derivative_param):
+def update_state_rewards(agents, current_states, state_rewards, accumulated_error, last_error, adaptive_param, integral_param, derivative_param):
+    """
+    Legacy PID update function, kept for backward compatibility.
+    This is now refactored in reinforcement_learning.py in the PIDController class.
+    """
     for k in range(len(state_rewards)):
-        state_counts = {state: 0 for state in possible_states}
+        state_counts = {state: 0 for state in current_states}
         for agent in agents:
             state_counts[agent.declared_state[k]] += 1
-        for state in possible_states:
+        for state in current_states:
             if state == 'NO_STATE':
                 state_rewards[k][state] = 0
             else: 
                 state_share = state_counts[state]/len(agents)
-                ideal_share = 1/(len(possible_states)-1)  # -1 for NO_STATE
+                ideal_share = 1/(len(current_states)-1)  # -1 for NO_STATE
                 error = (ideal_share-state_share)
                 accumulated_error[k][state] = accumulated_error[k][state] + error
                 P_term = adaptive_param*error
@@ -180,16 +175,16 @@ def update_state_rewards(agents, possible_states, state_rewards, accumulated_err
     return state_rewards, accumulated_error, last_error
 
 
-def distribute_rewards(agents, possible_states, state_rewards):
+def distribute_rewards(agents, current_states, state_rewards):
     NUM_ATTRIBUTES = len(state_rewards)
     state_rewards_last_epoch = state_rewards.copy()  # Make a copy to avoid reference issues
     
     for k in range(NUM_ATTRIBUTES):
-        state_counts = {state: 0 for state in possible_states}
+        state_counts = {state: 0 for state in current_states}
         for agent in agents:
             state_counts[agent.declared_state[k]] += 1
 
-        for state in possible_states:
+        for state in current_states:
             if state_counts[state] > 0:
                 state_rewards_last_epoch[k][state] = state_rewards[k][state] / state_counts[state]
             else:

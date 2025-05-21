@@ -529,3 +529,498 @@ def analyze_system_adaptability(diversity_values, transition_epoch, ideal_before
         "phase2_settling_time": settling_time,
         "final_adaptation_quality": adaptation_quality
     }
+
+"""
+Enhanced metrics for comparing PID and RL controllers.
+These functions will be added to measurement_functions.py
+"""
+
+def calculate_convergence_metrics(diversity_values, ideal_diversity, tolerance=0.9, window_size=20):
+    """
+    Calculate comprehensive convergence metrics for a system.
+    
+    Parameters:
+    -----------
+    diversity_values : list
+        Time series of diversity values
+    ideal_diversity : float
+        The ideal diversity value to reach
+    tolerance : float, optional (default=0.9)
+        Fraction of ideal diversity that must be reached (0.9 = 90% of ideal)
+    window_size : int, optional (default=20)
+        Number of consecutive epochs that must stay above threshold
+        
+    Returns:
+    --------
+    dict
+        Dictionary containing convergence metrics
+    """
+    threshold = ideal_diversity * tolerance
+    converged = False
+    convergence_epoch = None
+    
+    # Time to convergence - when diversity stays above threshold for window_size epochs
+    for i in range(len(diversity_values) - window_size + 1):
+        window = diversity_values[i:i+window_size]
+        if all(d >= threshold for d in window):
+            converged = True
+            convergence_epoch = i
+            break
+    
+    # Calculate convergence rate (how quickly system approaches target)
+    convergence_rate = None
+    if convergence_epoch is not None and convergence_epoch > 10:
+        # Use an exponential fit to the pre-convergence data
+        # to estimate the convergence rate
+        try:
+            import numpy as np
+            from scipy.optimize import curve_fit
+            
+            def exp_func(x, a, b, c):
+                return a * (1 - np.exp(-b * x)) + c
+            
+            x_data = np.arange(convergence_epoch)
+            y_data = np.array(diversity_values[:convergence_epoch])
+            
+            # Only attempt curve fitting if we have enough data points
+            if len(x_data) > 5:
+                # Initial parameter guesses
+                p0 = [ideal_diversity, 0.1, 0]
+                try:
+                    popt, _ = curve_fit(exp_func, x_data, y_data, p0=p0, maxfev=5000)
+                    convergence_rate = popt[1]  # Extract the rate parameter
+                except:
+                    # If curve fitting fails, fall back to simpler method
+                    convergence_rate = None
+        except ImportError:
+            # If scipy is not available, use a simpler method
+            convergence_rate = None
+    
+    # If scipy curve fitting failed or wasn't available, calculate a simpler rate
+    if convergence_rate is None and convergence_epoch is not None and convergence_epoch > 5:
+        # Calculate average rate of increase in first portion of convergence
+        initial_value = diversity_values[0]
+        midpoint = min(convergence_epoch // 2, len(diversity_values) - 1)
+        if midpoint > 0:
+            midpoint_value = diversity_values[midpoint]
+            convergence_rate = (midpoint_value - initial_value) / midpoint
+    
+    # Calculate steady-state error after convergence
+    steady_state_error = None
+    steady_state_stability = None
+    
+    if converged and convergence_epoch < len(diversity_values) - window_size:
+        post_convergence = diversity_values[convergence_epoch:]
+        mean_post = sum(post_convergence) / len(post_convergence)
+        steady_state_error = (ideal_diversity - mean_post) / ideal_diversity
+        
+        # Calculate stability (coefficient of variation in steady state)
+        variance = sum((x - mean_post) ** 2 for x in post_convergence) / len(post_convergence)
+        std_dev = variance ** 0.5
+        steady_state_stability = std_dev / mean_post if mean_post > 0 else float('inf')
+    
+    # Return comprehensive metrics
+    return {
+        "time_to_convergence": convergence_epoch,
+        "convergence_rate": convergence_rate,
+        "steady_state_error": steady_state_error, 
+        "steady_state_stability": steady_state_stability,
+        "final_diversity_quality": diversity_values[-1] / ideal_diversity if ideal_diversity > 0 else 0,
+        "converged": converged
+    }
+
+def calculate_resilience_metrics(diversity_values, transition_epoch, ideal_before, ideal_after, 
+                              recovery_threshold=0.9):
+    """
+    Calculate comprehensive resilience metrics for a system responding to a new state.
+    
+    Parameters:
+    -----------
+    diversity_values : list
+        Time series of diversity values
+    transition_epoch : int
+        Epoch at which the new state was introduced
+    ideal_before : float
+        Ideal diversity before transition
+    ideal_after : float
+        Ideal diversity after transition
+    recovery_threshold : float, optional (default=0.9)
+        Fraction of pre-transition quality that must be recovered
+        
+    Returns:
+    --------
+    dict
+        Dictionary with resilience metrics
+    """
+    # Ensure we have enough data
+    if transition_epoch >= len(diversity_values) or transition_epoch < 5:
+        return {
+            "error": "Insufficient data for analysis"
+        }
+    
+    # Extract pre-transition and post-transition diversity values
+    pre_values = diversity_values[:transition_epoch]
+    post_values = diversity_values[transition_epoch:]
+    
+    # Calculate pre-transition baseline (average of last 20% of pre-transition)
+    baseline_window = max(5, int(len(pre_values) * 0.2))
+    pre_baseline = sum(pre_values[-baseline_window:]) / baseline_window
+    pre_quality = pre_baseline / ideal_before if ideal_before > 0 else 0
+    
+    # Calculate immediate impact
+    if post_values:
+        initial_post = post_values[0]
+        impact_magnitude = pre_baseline - initial_post
+        impact_percentage = impact_magnitude / pre_baseline if pre_baseline > 0 else 0
+    else:
+        impact_magnitude = None
+        impact_percentage = None
+    
+    # Calculate recovery time (time to reach recovery_threshold of pre-quality adjusted for new ideal)
+    recovery_target = pre_quality * recovery_threshold * ideal_after / ideal_before
+    absolute_recovery_target = recovery_target * ideal_after
+    
+    recovery_time = None
+    for i, val in enumerate(post_values):
+        if val >= absolute_recovery_target:
+            recovery_time = i
+            break
+    
+    # Calculate re-convergence time (time to reach 90% of new ideal diversity)
+    reconvergence_target = 0.9 * ideal_after
+    reconvergence_time = None
+    for i, val in enumerate(post_values):
+        if val >= reconvergence_target:
+            reconvergence_time = i
+            break
+    
+    # Calculate final adaptation quality
+    if post_values:
+        # Use the last 20% of post-transition values for final assessment
+        final_window = max(5, int(len(post_values) * 0.2))
+        final_avg = sum(post_values[-final_window:]) / final_window
+        final_quality = final_avg / ideal_after if ideal_after > 0 else 0
+    else:
+        final_quality = None
+    
+    # Calculate return to stability (coefficient of variation less than 0.05)
+    stable_window = 20  # Window size to check stability
+    stability_threshold = 0.05  # CV threshold for stability
+    
+    stability_time = None
+    if len(post_values) > stable_window:
+        for i in range(len(post_values) - stable_window + 1):
+            window = post_values[i:i+stable_window]
+            mean_window = sum(window) / stable_window
+            variance = sum((x - mean_window) ** 2 for x in window) / stable_window
+            cv = (variance ** 0.5) / mean_window if mean_window > 0 else float('inf')
+            
+            if cv < stability_threshold:
+                stability_time = i
+                break
+    
+    return {
+        "pre_transition_quality": pre_quality,
+        "initial_impact_magnitude": impact_magnitude,
+        "initial_impact_percentage": impact_percentage * 100 if impact_percentage is not None else None,
+        "recovery_time_epochs": recovery_time,
+        "reconvergence_time_epochs": reconvergence_time,
+        "stability_time_epochs": stability_time,
+        "final_adaptation_quality": final_quality
+    }
+
+def calculate_resource_efficiency(diversity_values, rewards_history, ideal_diversity):
+    """
+    Calculate resource efficiency metrics - how effectively rewards are used to achieve diversity.
+    
+    Parameters:
+    -----------
+    diversity_values : list
+        Time series of diversity values
+    rewards_history : list
+        Time series of total rewards allocated
+    ideal_diversity : float
+        The ideal diversity target
+        
+    Returns:
+    --------
+    dict
+        Dictionary with resource efficiency metrics
+    """
+    # Ensure inputs have matching lengths
+    min_length = min(len(diversity_values), len(rewards_history))
+    diversity_values = diversity_values[:min_length]
+    rewards_history = rewards_history[:min_length]
+    
+    if min_length == 0:
+        return {
+            "error": "No data available for analysis"
+        }
+    
+    # Calculate total reward usage
+    total_rewards = sum(rewards_history)
+    avg_reward_per_epoch = total_rewards / min_length
+    
+    # Calculate absolute reward values (since negative values can offset positive ones)
+    absolute_rewards = [abs(r) for r in rewards_history]
+    total_absolute_rewards = sum(absolute_rewards)
+    avg_absolute_reward = total_absolute_rewards / min_length
+    
+    # Calculate average diversity achieved
+    avg_diversity = sum(diversity_values) / min_length
+    
+    # Calculate resource efficiency (diversity per unit of reward)
+    efficiency = avg_diversity / avg_absolute_reward if avg_absolute_reward > 0 else float('inf')
+    
+    # Calculate normalized efficiency (as percentage of ideal)
+    normalized_efficiency = (avg_diversity / ideal_diversity) / avg_absolute_reward * 100 if ideal_diversity > 0 and avg_absolute_reward > 0 else 0
+    
+    # Calculate reward volatility
+    reward_variance = sum((r - avg_reward_per_epoch) ** 2 for r in rewards_history) / min_length
+    reward_volatility = (reward_variance ** 0.5) / avg_reward_per_epoch if avg_reward_per_epoch != 0 else float('inf')
+    
+    # Calculate efficiency over time (improving or degrading?)
+    if min_length >= 20:
+        # Compare first 25% vs last 25%
+        quarter_length = min_length // 4
+        
+        # First quarter metrics
+        first_quarter_div = sum(diversity_values[:quarter_length]) / quarter_length
+        first_quarter_rew = sum(absolute_rewards[:quarter_length]) / quarter_length
+        first_quarter_eff = first_quarter_div / first_quarter_rew if first_quarter_rew > 0 else 0
+        
+        # Last quarter metrics
+        last_quarter_div = sum(diversity_values[-quarter_length:]) / quarter_length
+        last_quarter_rew = sum(absolute_rewards[-quarter_length:]) / quarter_length
+        last_quarter_eff = last_quarter_div / last_quarter_rew if last_quarter_rew > 0 else 0
+        
+        # Calculate efficiency trend
+        if first_quarter_eff > 0:
+            efficiency_trend = (last_quarter_eff - first_quarter_eff) / first_quarter_eff
+        else:
+            efficiency_trend = float('inf') if last_quarter_eff > 0 else 0
+    else:
+        efficiency_trend = None
+    
+    return {
+        "avg_reward_per_epoch": avg_reward_per_epoch,
+        "avg_absolute_reward": avg_absolute_reward,
+        "total_cumulative_reward": total_rewards,
+        "total_absolute_reward": total_absolute_rewards,
+        "diversity_per_reward_unit": efficiency,
+        "normalized_efficiency": normalized_efficiency,
+        "reward_volatility": reward_volatility,
+        "efficiency_trend": efficiency_trend
+    }
+
+def analyze_pid_parameter_evolution(pid_params_history, diversity_values, transition_epoch=None):
+    """
+    Analyze how PID parameters evolve and affect system performance (for RL-tuned PID).
+    
+    Parameters:
+    -----------
+    pid_params_history : list
+        Time series of tuples (P, I, D) representing PID parameters at each epoch
+    diversity_values : list
+        Time series of diversity values
+    transition_epoch : int, optional
+        Epoch at which a new state was introduced
+        
+    Returns:
+    --------
+    dict
+        Dictionary with PID parameter analysis metrics
+    """
+    # Ensure we have enough data
+    if len(pid_params_history) < 10:
+        return {
+            "error": "Insufficient data for analysis"
+        }
+    
+    # Extract P, I, D parameter series
+    p_values = [params[0] for params in pid_params_history]
+    i_values = [params[1] for params in pid_params_history]
+    d_values = [params[2] for params in pid_params_history]
+    
+    # Calculate parameter stability (coefficient of variation)
+    def calculate_stability(values):
+        if not values:
+            return None
+        mean = sum(values) / len(values)
+        if mean == 0:
+            return float('inf')
+        variance = sum((x - mean) ** 2 for x in values) / len(values)
+        return (variance ** 0.5) / mean
+    
+    # Overall parameter stability
+    p_stability = calculate_stability(p_values)
+    i_stability = calculate_stability(i_values)
+    d_stability = calculate_stability(d_values)
+    
+    # Calculate parameter ratios over time
+    pid_ratios = []
+    for p, i, d in pid_params_history:
+        total = p + i + d
+        if total > 0:
+            pid_ratios.append((p/total, i/total, d/total))
+        else:
+            pid_ratios.append((0, 0, 0))
+    
+    # Calculate final parameter composition
+    final_p, final_i, final_d = pid_params_history[-1]
+    final_total = final_p + final_i + final_d
+    if final_total > 0:
+        final_composition = {
+            "p_percentage": (final_p / final_total) * 100,
+            "i_percentage": (final_i / final_total) * 100,
+            "d_percentage": (final_d / final_total) * 100
+        }
+    else:
+        final_composition = {
+            "p_percentage": 0,
+            "i_percentage": 0,
+            "d_percentage": 0
+        }
+    
+    # If transition epoch is provided, analyze adaptation speed
+    if transition_epoch is not None and transition_epoch < len(pid_params_history) - 10:
+        # Compare parameter change speed after transition
+        pre_transition = pid_params_history[max(0, transition_epoch-10):transition_epoch]
+        post_transition = pid_params_history[transition_epoch:transition_epoch+10]
+        
+        # Calculate average rate of change before and after
+        def calculate_change_rate(params_list):
+            if len(params_list) < 2:
+                return (0, 0, 0)
+            
+            p_changes = [abs(params_list[i+1][0] - params_list[i][0]) for i in range(len(params_list)-1)]
+            i_changes = [abs(params_list[i+1][1] - params_list[i][1]) for i in range(len(params_list)-1)]
+            d_changes = [abs(params_list[i+1][2] - params_list[i][2]) for i in range(len(params_list)-1)]
+            
+            return (
+                sum(p_changes) / len(p_changes) if p_changes else 0,
+                sum(i_changes) / len(i_changes) if i_changes else 0,
+                sum(d_changes) / len(d_changes) if d_changes else 0
+            )
+        
+        pre_change_rate = calculate_change_rate(pre_transition)
+        post_change_rate = calculate_change_rate(post_transition)
+        
+        adaptation_speed = {
+            "p_adaptation_ratio": post_change_rate[0] / pre_change_rate[0] if pre_change_rate[0] > 0 else float('inf'),
+            "i_adaptation_ratio": post_change_rate[1] / pre_change_rate[1] if pre_change_rate[1] > 0 else float('inf'),
+            "d_adaptation_ratio": post_change_rate[2] / pre_change_rate[2] if pre_change_rate[2] > 0 else float('inf')
+        }
+    else:
+        adaptation_speed = None
+    
+    # Parameter-performance correlation
+    # Calculate correlation between parameter changes and diversity improvements
+    if len(diversity_values) >= len(pid_params_history):
+        diversity_values = diversity_values[:len(pid_params_history)]
+        
+        diversity_changes = [diversity_values[i+1] - diversity_values[i] for i in range(len(diversity_values)-1)]
+        p_changes = [p_values[i+1] - p_values[i] for i in range(len(p_values)-1)]
+        i_changes = [i_values[i+1] - i_values[i] for i in range(len(i_values)-1)]
+        d_changes = [d_values[i+1] - d_values[i] for i in range(len(d_values)-1)]
+        
+        # Calculate Pearson correlation
+        def calculate_correlation(x, y):
+            if len(x) != len(y) or len(x) < 2:
+                return None
+            
+            x_mean = sum(x) / len(x)
+            y_mean = sum(y) / len(y)
+            
+            numerator = sum((x[i] - x_mean) * (y[i] - y_mean) for i in range(len(x)))
+            denom_x = sum((val - x_mean) ** 2 for val in x) ** 0.5
+            denom_y = sum((val - y_mean) ** 2 for val in y) ** 0.5
+            
+            if denom_x > 0 and denom_y > 0:
+                return numerator / (denom_x * denom_y)
+            else:
+                return None
+        
+        parameter_effectiveness = {
+            "p_effectiveness": calculate_correlation(p_changes, diversity_changes),
+            "i_effectiveness": calculate_correlation(i_changes, diversity_changes),
+            "d_effectiveness": calculate_correlation(d_changes, diversity_changes)
+        }
+    else:
+        parameter_effectiveness = None
+    
+    return {
+        "parameter_stability": {
+            "p_stability": p_stability,
+            "i_stability": i_stability,
+            "d_stability": d_stability
+        },
+        "final_composition": final_composition,
+        "adaptation_speed": adaptation_speed,
+        "parameter_effectiveness": parameter_effectiveness
+    }
+
+def compile_system_performance_metrics(diversity_values, rewards_history, pid_params_history, 
+                                     transition_epoch, ideal_before, ideal_after):
+    """
+    Compile all performance metrics into a single comprehensive report.
+    
+    Parameters:
+    -----------
+    diversity_values : list
+        Time series of diversity values
+    rewards_history : list
+        Time series of total rewards allocated
+    pid_params_history : list or None
+        Time series of tuples (P, I, D) representing PID parameters (for RL mode)
+    transition_epoch : int
+        Epoch at which the new state was introduced
+    ideal_before : float
+        Ideal diversity before transition
+    ideal_after : float
+        Ideal diversity after transition
+        
+    Returns:
+    --------
+    dict
+        Dictionary with all performance metrics
+    """
+    # Calculate Phase 1 convergence (before transition)
+    phase1_values = diversity_values[:transition_epoch]
+    phase1_convergence = calculate_convergence_metrics(phase1_values, ideal_before)
+    
+    # Calculate Phase 2 convergence (after transition)
+    phase2_values = diversity_values[transition_epoch:]
+    phase2_convergence = calculate_convergence_metrics(phase2_values, ideal_after)
+    
+    # Calculate resilience metrics
+    resilience = calculate_resilience_metrics(diversity_values, transition_epoch, ideal_before, ideal_after)
+    
+    # Calculate resource efficiency
+    # For phase 1
+    phase1_rewards = rewards_history[:transition_epoch] if transition_epoch <= len(rewards_history) else rewards_history
+    phase1_efficiency = calculate_resource_efficiency(phase1_values, phase1_rewards, ideal_before)
+    
+    # For phase 2
+    phase2_rewards = rewards_history[transition_epoch:] if transition_epoch < len(rewards_history) else []
+    phase2_efficiency = calculate_resource_efficiency(phase2_values, phase2_rewards, ideal_after)
+    
+    # For overall
+    overall_efficiency = calculate_resource_efficiency(diversity_values, rewards_history, 
+                                                     ideal_after)  # Use final ideal as reference
+    
+    # Calculate PID parameter evolution metrics if available
+    pid_evolution = None
+    if pid_params_history is not None and len(pid_params_history) > 0:
+        pid_evolution = analyze_pid_parameter_evolution(pid_params_history, diversity_values, transition_epoch)
+    
+    # Compile all metrics
+    return {
+        "phase1_convergence": phase1_convergence,
+        "phase2_convergence": phase2_convergence,
+        "resilience": resilience,
+        "phase1_efficiency": phase1_efficiency,
+        "phase2_efficiency": phase2_efficiency,
+        "overall_efficiency": overall_efficiency,
+        "pid_evolution": pid_evolution
+    }

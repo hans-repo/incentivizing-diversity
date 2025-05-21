@@ -1,0 +1,1 @@
+- It seems like the RL is increasing its reward function in the negative as fast as possible.

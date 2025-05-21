@@ -1,724 +1,900 @@
 import numpy as np
 import random
-import matplotlib.pyplot as plt
-from collections import deque
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from collections import deque, namedtuple
 
-class RewardEnvironment:
-    """
-    Environment for the RL agent that provides state rewards based on agent distributions.
-    This environment has a dynamic state space that can change during the simulation.
-    Modified for improved stability and reward shaping.
-    """
-    def __init__(self, possible_states, n_agents):
-        self.possible_states = possible_states.copy()
+# Define experience tuple structure
+Experience = namedtuple('Experience', ['state', 'action', 'reward', 'next_state', 'done'])
+
+class ReplayBuffer:
+    """Experience replay buffer to store and sample experiences"""
+    
+    def __init__(self, capacity=10000):
+        self.buffer = deque(maxlen=capacity)
+        self.state_dim = None  # Track state dimension
+        self.action_dim = None  # Track action dimension
+    
+    def add(self, state, action, reward, next_state, done):
+        """Add experience to buffer"""
+        # Check and update dimensions on first addition
+        if len(self.buffer) == 0:
+            self.state_dim = len(state)
+            if isinstance(action, (np.ndarray, list)):
+                self.action_dim = len(action)
+            else:
+                self.action_dim = 1  # Scalar action
+            
+        # Skip adding experiences if dimensions don't match
+        if len(state) != self.state_dim:
+            print(f"Skipping experience with mismatched state dimension: got {len(state)}, expected {self.state_dim}")
+            return
+            
+        if isinstance(action, (np.ndarray, list)) and len(action) != self.action_dim:
+            print(f"Skipping experience with mismatched action dimension: got {len(action)}, expected {self.action_dim}")
+            return
+            
+        # Make a copy of state and next_state to ensure they don't get modified
+        state_copy = state.copy() if isinstance(state, (list, np.ndarray)) else state
+        next_state_copy = next_state.copy() if isinstance(next_state, (list, np.ndarray)) else next_state
+        
+        # Make a copy of action to ensure it doesn't get modified
+        if isinstance(action, (list, np.ndarray)):
+            action_copy = action.copy()
+        else:
+            action_copy = action
+            
+        experience = Experience(state_copy, action_copy, reward, next_state_copy, done)
+        self.buffer.append(experience)
+    
+    def sample(self, batch_size):
+        """Randomly sample batch_size experiences from buffer"""
+        if len(self.buffer) < batch_size:
+            # Return None if not enough samples
+            return None
+            
+        try:
+            experiences = random.sample(self.buffer, min(batch_size, len(self.buffer)))
+            
+            # Convert experiences to numpy arrays first for safer handling
+            states = np.array([list(e.state) for e in experiences])  # Ensure state is listified
+            
+            # Handle actions - make sure they're all the same type (list or scalar)
+            if isinstance(experiences[0].action, (np.ndarray, list)):
+                actions = np.array([list(e.action) for e in experiences])
+            else:
+                # For scalar actions
+                actions = np.array([[e.action] for e in experiences])
+                
+            rewards = np.array([[e.reward] for e in experiences])
+            next_states = np.array([list(e.next_state) for e in experiences])  # Ensure state is listified
+            dones = np.array([[e.done] for e in experiences])
+            
+            # Convert to tensors
+            states_tensor = torch.FloatTensor(states)
+            actions_tensor = torch.FloatTensor(actions)
+            rewards_tensor = torch.FloatTensor(rewards)
+            next_states_tensor = torch.FloatTensor(next_states)
+            dones_tensor = torch.FloatTensor(dones)
+            
+            return states_tensor, actions_tensor, rewards_tensor, next_states_tensor, dones_tensor
+            
+        except (ValueError, RuntimeError) as e:
+            print(f"Error sampling from replay buffer: {e}")
+            import traceback
+            traceback.print_exc()
+            # Clear buffer if we encounter errors
+            self.clear()
+            return None
+    
+    def __len__(self):
+        return len(self.buffer)
+        
+    def clear(self):
+        """Clear the replay buffer"""
+        self.buffer.clear()
+        self.state_dim = None
+        self.action_dim = None
+
+
+class DQNModel(nn.Module):
+    """Deep Q-Network model"""
+    
+    def __init__(self, state_dim, action_dim, hidden_dim=64):
+        super(DQNModel, self).__init__()
+        self.fc1 = nn.Linear(state_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, action_dim)
+        
+        # Initialize network with smaller weights for more gradual changes
+        self._initialize_weights()
+    
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        # Use tanh to constrain output between -1 and 1 for smoother actions
+        return torch.tanh(self.fc3(x))
+    
+    def _initialize_weights(self):
+        """Initialize weights with smaller values for more cautious initial behavior"""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight, gain=0.5)  # Lower gain for smaller values
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+
+
+class RewardController:
+    """Base class for reward controllers"""
+    
+    def __init__(self, states, attribute_idx=0):
+        self.states = states
+        self.attribute_idx = attribute_idx
+    
+    def update_rewards(self, agents, current_states, state_rewards, *args, **kwargs):
+        """Update rewards based on current state distribution"""
+        raise NotImplementedError
+
+
+class PIDController(RewardController):
+    """PID controller for reward adjustment"""
+    
+    def __init__(self, states, p_param, i_param, d_param, attribute_idx=0):
+        super(PIDController, self).__init__(states, attribute_idx)
+        self.p_param = p_param
+        self.i_param = i_param
+        self.d_param = d_param
+        self.accumulated_error = {state: 0 for state in states}
+        self.last_error = {state: 0 for state in states}
+    
+    def update_rewards(self, agents, current_states, state_rewards, *args, **kwargs):
+        """Update rewards using PID control"""
+        state_counts = {state: 0 for state in current_states}
+        for agent in agents:
+            state_counts[agent.declared_state[self.attribute_idx]] += 1
+        
+        for state in current_states:
+            if state == 'NO_STATE':
+                state_rewards[self.attribute_idx][state] = 0
+            else:
+                state_share = state_counts[state] / len(agents)
+                ideal_share = 1 / (len(current_states) - 1)  # -1 for NO_STATE
+                error = (ideal_share - state_share)
+                
+                # Update accumulated error if state exists in it, otherwise initialize it
+                if state in self.accumulated_error:
+                    self.accumulated_error[state] += error
+                else:
+                    self.accumulated_error[state] = error
+                    
+                # Get last error, default to 0 if not found
+                last_err = self.last_error.get(state, 0)
+                
+                # PID terms
+                p_term = self.p_param * error
+                i_term = self.i_param * self.accumulated_error[state]
+                d_term = self.d_param * (error - last_err)
+                
+                # Update rewards
+                state_rewards[self.attribute_idx][state] = p_term + i_term + d_term
+                
+                # Store current error as last error for next iteration
+                self.last_error[state] = error
+        
+        return state_rewards
+
+
+class RLPIDController(RewardController):
+    """RL-based PID parameter tuner - adaptively learns reward scale and PID parameters"""
+    
+    def __init__(self, states, n_agents, initial_p=0, initial_i=0, initial_d=0,
+                 epsilon=1.0, epsilon_decay=0.995, 
+                 epsilon_min=0.01, gamma=0.99, learning_rate=0.001, batch_size=32, 
+                 update_frequency=10, target_update_frequency=100, attribute_idx=0,
+                 action_scale=0.1, reward_efficiency_weight=0.3,
+                 p_scale_factor=None, i_scale_factor=None, d_scale_factor=None):
+        super(RLPIDController, self).__init__(states, attribute_idx)
+        
+        # RL parameters
         self.n_agents = n_agents
-        self.valid_states = [s for s in possible_states if s != 'NO_STATE']
-        self.num_valid_states = len(self.valid_states)
+        self.epsilon = epsilon  # Exploration rate
+        self.epsilon_decay = epsilon_decay
+        self.epsilon_min = epsilon_min
+        self.gamma = gamma  # Discount factor
+        self.learning_rate = learning_rate
+        self.batch_size = batch_size
+        self.update_frequency = update_frequency
+        self.target_update_frequency = target_update_frequency
+        self.action_scale = action_scale  # Control the magnitude of PID parameter adjustments
         
-        # State is the distribution of agents across the states
-        self.state = None
-        self.prev_state = None  # Track previous state for reward shaping
+        # Weight for balancing diversity vs efficiency in reward function
+        # Higher values give more weight to minimizing total rewards
+        self.reward_efficiency_weight = reward_efficiency_weight
         
-        # Ideal distribution is even across all valid states
-        self.ideal_distribution = self._calculate_ideal_distribution()
+        # PID parameters (initialized to zeros or passed values)
+        self.p_param = initial_p
+        self.i_param = initial_i
+        self.d_param = initial_d
+        self.prev_pid_params = (initial_p, initial_i, initial_d)
         
-        # For measuring entropy directly
-        self.entropy_history = []
-        self.ideal_entropy = self._calculate_ideal_entropy()
+        # Dynamic reward scale that the RL controller will learn
+        self.reward_scale = 100.0  # Initial small estimate that will be adjusted
         
-        # Smoothing factors
-        self.reward_smoothing = 0.8  # Exponential moving average factor
-        self.smoothed_reward = 0  # Initialize smoothed reward
+        # Scale factors for P, I, D relative to reward_scale (now configurable)
+        self.p_scale_factor = p_scale_factor if p_scale_factor is not None else 10.0
+        self.i_scale_factor = i_scale_factor if i_scale_factor is not None else 1.0
+        self.d_scale_factor = d_scale_factor if d_scale_factor is not None else 1.0
         
-    def _calculate_ideal_distribution(self):
-        """Calculate the ideal (even) distribution across all valid states"""
-        ideal = {}
-        for state in self.possible_states:
-            if state == 'NO_STATE':
-                ideal[state] = 0
-            else:
-                ideal[state] = 1 / self.num_valid_states
-        return ideal
+        # Initial adaptive bounds that will adjust during training
+        self.max_p = self.reward_scale * self.p_scale_factor
+        self.max_i = self.reward_scale * self.i_scale_factor
+        self.max_d = self.reward_scale * self.d_scale_factor
+        
+        # PID state tracking
+        self.accumulated_error = {state: 0 for state in states}
+        self.last_error = {state: 0 for state in states}
+        
+        # Anti-windup for I term - prevent integral accumulation from getting too large
+        self.i_term_max = self.reward_scale * 5  # Initial value, will be adjusted
+        
+        # Track current agent distribution for state representation
+        self.agent_counts = {state: 0 for state in states}
+        
+        # Define state and action dimensions
+        # State includes: agent distribution + current PID parameters + current reward scale
+        self.state_dim = len(states) + 4  # +3 for current P, I, D values, +1 for reward scale
+        
+        # Actions: adjustments to P, I, D, and reward_scale
+        self.action_dim = 4  # One action dimension for each PID parameter + reward scale
+        
+        # Initialize models
+        self.policy_net = DQNModel(self.state_dim, self.action_dim)
+        self.target_net = DQNModel(self.state_dim, self.action_dim)
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.learning_rate)
+        
+        # Initialize replay buffer
+        self.replay_buffer = ReplayBuffer(capacity=10000)
+        
+        # Track episodes and steps
+        self.steps_done = 0
+        self.epoch = 0
+        
+        # Store previous state
+        self.prev_state = None
+        self.prev_action = None
+        
+        # Store state mapping (index to state name)
+        self.state_to_idx = {state: i for i, state in enumerate(states)}
+        self.idx_to_state = {i: state for i, state in enumerate(self.states)}
+        
+        # Previous diversity for reward calculation
+        self.prev_diversity = 0
+        self.ideal_diversity = 0
+        
+        # Track total rewards for efficiency calculation
+        self.prev_total_rewards = 0
+        self.total_rewards_history = deque(maxlen=10)
+        
+        # Track max observed rewards to adaptively set bounds
+        self.max_observed_reward = self.reward_scale
+        self.reward_history = []
+        
+        # Performance tracking
+        self.last_diversity_ratios = deque(maxlen=10)  # Track recent diversity performance
+        self.best_diversity_ratio = 0  # Best diversity ratio achieved
+        self.best_pid_params = (initial_p, initial_i, initial_d)  # Best parameters found
+        self.best_reward_scale = self.reward_scale  # Best reward scale found
     
-    def _calculate_ideal_entropy(self):
-        """Calculate ideal entropy (Shannon entropy) for even distribution"""
-        # Only count non-NO_STATE states for entropy calculation
-        num_valid = len(self.valid_states)
-        if num_valid <= 1:
-            return 0.0
+    def update_adaptive_bounds(self, current_rewards):
+        """Update adaptive bounds for PID parameters based on observed rewards"""
+        # Extract the maximum absolute reward value in the current state
+        current_max_reward = max([abs(r) for r in current_rewards.values() if r != 0], default=0)
         
-        p = 1.0 / num_valid  # Equal probability for each state
-        return -num_valid * p * np.log2(p)  # Shannon entropy
-        
-    def _calculate_entropy(self, distribution):
-        """Calculate Shannon entropy of current distribution"""
-        entropy = 0
-        valid_distribution = {s: distribution[s] for s in self.valid_states}
-        total = sum(valid_distribution.values())
-        
-        if total == 0:
-            return 0
+        # No artificial caps on rewards
+        self.max_observed_reward = max(self.max_observed_reward, current_max_reward)
             
-        # Normalize to create a proper probability distribution
-        for state in self.valid_states:
-            p = valid_distribution[state] / total
-            if p > 0:  # Avoid log(0)
-                entropy -= p * np.log2(p)
-                
-        return entropy
-    
-    def update_states(self, new_states):
-        """Update the possible states (e.g., when a new state is added)"""
-        self.possible_states = new_states.copy()
-        self.valid_states = [s for s in new_states if s != 'NO_STATE']
-        self.num_valid_states = len(self.valid_states)
-        self.ideal_distribution = self._calculate_ideal_distribution()
-        self.ideal_entropy = self._calculate_ideal_entropy()
-        
-        # Reset state tracking when environment changes
-        self.prev_state = self.state
-        self.state = None
-    
-    def observe_state(self, agents):
-        """
-        Observe the current distribution of agents across states
-        
-        Args:
-            agents: List of Agent objects
+        # Keep a short history of recent max rewards
+        self.reward_history.append(current_max_reward)
+        if len(self.reward_history) > 10:  # Keep only recent history
+            self.reward_history.pop(0)
             
-        Returns:
-            Observed state as a normalized distribution dictionary
-        """
-        state_counts = {state: 0 for state in self.possible_states}
+        # Calculate average of recent max rewards for stability
+        avg_max_reward = sum(self.reward_history) / max(1, len(self.reward_history))
+        
+        # Dynamically adjust max bounds based on observed rewards and current reward_scale
+        self.max_p = max(self.max_p, avg_max_reward * self.p_scale_factor)
+        self.max_i = max(self.max_i, avg_max_reward * self.i_scale_factor)
+        self.max_d = max(self.max_d, avg_max_reward * self.d_scale_factor)
+        
+        # Update I-term max based on current reward scale
+        self.i_term_max = self.reward_scale * 5
+        
+        # Log if bounds have been updated significantly
+        if self.steps_done % 100 == 0:
+            print(f"Adaptive bounds: max_p={self.max_p:.1f}, max_i={self.max_i:.1f}, max_d={self.max_d:.1f}, reward_scale={self.reward_scale:.1f}")
+    
+    def get_state_representation(self, agents, current_states):
+        """Create state representation: [agent distribution, P, I, D, reward_scale]"""
+        # Get agent distribution
+        state_counts = {state: 0 for state in current_states}
         for agent in agents:
-            state_counts[agent.declared_state[0]] += 1  # Using only first attribute for simplicity
+            state_counts[agent.declared_state[self.attribute_idx]] += 1
         
-        # Convert to distribution
-        distribution = {}
-        for state in self.possible_states:
-            distribution[state] = state_counts[state] / self.n_agents
+        # Convert to distribution (percentage in each state)
+        state_vector = np.zeros(len(self.state_to_idx))
         
-        # Store previous state before updating
-        self.prev_state = self.state    
-        self.state = distribution
-        return distribution
-    
-    def calculate_reward(self, distribution=None):
-        """
-        Calculate reward based on how close the distribution is to ideal
-        With improved reward shaping for stability
+        # Ensure we only include states that we know about in our state representation
+        for state, count in state_counts.items():
+            if state in self.state_to_idx:  # Only include known states
+                state_vector[self.state_to_idx[state]] = count / self.n_agents
         
-        Args:
-            distribution: Current distribution of agents (if None, use self.state)
-            
-        Returns:
-            reward: Scalar value indicating quality of distribution
-            state_rewards: Dictionary of rewards for each state
-        """
-        if distribution is None:
-            distribution = self.state
-            
-        if distribution is None:
-            raise ValueError("No state distribution available")
+        # Use logarithmic normalization for PID parameters to handle a wide range of values
+        # Add a small constant to avoid log(0)
+        norm_p = np.log1p(self.p_param) / np.log1p(self.max_p) if self.max_p > 0 else 0
+        norm_i = np.log1p(self.i_param) / np.log1p(self.max_i) if self.max_i > 0 else 0
+        norm_d = np.log1p(self.d_param) / np.log1p(self.max_d) if self.max_d > 0 else 0
         
-        # Calculate Shannon entropy of current distribution
-        current_entropy = self._calculate_entropy(distribution)
-        self.entropy_history.append(current_entropy)
+        # Normalize reward scale (logarithmically)
+        norm_reward_scale = np.log1p(self.reward_scale) / np.log1p(self.max_observed_reward * 10) if self.max_observed_reward > 0 else 0.5
         
-        # Calculate reward based on entropy (closer to ideal_entropy is better)
-        # Normalize to [0, 1] scale
-        if self.ideal_entropy > 0:
-            entropy_ratio = current_entropy / self.ideal_entropy
-            entropy_ratio = min(entropy_ratio, 1.0)  # Cap at 1.0 (ideal)
-        else:
-            entropy_ratio = 0
-            
-        # Primary reward based on entropy ratio
-        base_reward = entropy_ratio
+        # Clip to [0, 1] range for safety
+        norm_p = np.clip(norm_p, 0, 1)
+        norm_i = np.clip(norm_i, 0, 1)
+        norm_d = np.clip(norm_d, 0, 1)
+        norm_reward_scale = np.clip(norm_reward_scale, 0, 1)
         
-        # Add reward shaping for stability by measuring improvement
-        improvement_reward = 0
-        if self.prev_state is not None:
-            prev_entropy = self._calculate_entropy(self.prev_state)
-            improvement = current_entropy - prev_entropy
-            
-            # Only reward significant improvements to reduce noise
-            if improvement > 0.01:
-                improvement_reward = 0.1 * np.tanh(improvement * 5)  # Bounded improvement reward
-                
-        # Combine base reward and improvement reward
-        combined_reward = 0.8 * base_reward + 0.2 * improvement_reward
+        # Combine state vector with normalized parameters
+        full_state = np.append(state_vector, [norm_p, norm_i, norm_d, norm_reward_scale])
         
-        # Apply temporal smoothing for stability
-        if self.reward_smoothing > 0:
-            if self.smoothed_reward == 0:  # First update
-                self.smoothed_reward = combined_reward
+        # Verify that the state vector has the expected dimension
+        if len(full_state) != self.state_dim:
+            print(f"Warning: State dimension mismatch in get_state_representation. Got {len(full_state)}, expected {self.state_dim}")
+            print(f"State vector length: {len(state_vector)}, state_to_idx length: {len(self.state_to_idx)}")
+            # Adjust the state vector to match expected dimension
+            if len(full_state) < self.state_dim:
+                # Pad with zeros if too short
+                full_state = np.pad(full_state, (0, self.state_dim - len(full_state)), 'constant')
             else:
-                self.smoothed_reward = self.reward_smoothing * self.smoothed_reward + \
-                                      (1 - self.reward_smoothing) * combined_reward
-            final_reward = self.smoothed_reward
+                # Truncate if too long
+                full_state = full_state[:self.state_dim]
+        
+        return full_state.tolist()  # Convert to list for consistent serialization
+    
+    def select_action(self, state):
+        """Select action using epsilon-greedy policy with conservative bounds"""
+        # Dramatically reduce exploration when diversity is already good
+        effective_epsilon = self.epsilon
+        if random.random() < effective_epsilon:
+            # Exploration: choose random action but with limited range
+            bound = 0.3  # Limit random exploration to smaller values (-0.3 to 0.3)
+            return np.array([random.uniform(-bound, bound) for _ in range(self.action_dim)])
         else:
-            final_reward = combined_reward
-            
-        # Calculate rewards for each state based on divergence from ideal
-        state_rewards = {}
-        base_reward_scale = 1000 * self.n_agents  # Base reward size
+            # Exploitation: choose best action according to policy network
+            with torch.no_grad():
+                state_tensor = torch.FloatTensor(state).unsqueeze(0)
+                # Output already constrained by tanh in the network
+                return self.policy_net(state_tensor).squeeze().numpy()
+    
+    def update_model(self):
+        """Update the policy network using a batch of experiences"""
+        if len(self.replay_buffer) < self.batch_size:
+            return
         
-        for state in self.possible_states:
-            if state == 'NO_STATE':
-                state_rewards[state] = 0
-            else:
-                # Calculate state-specific reward with more stability
-                # - Positive reward for underrepresented states
-                # - Negative reward for overrepresented states
-                error = self.ideal_distribution[state] - distribution[state]
-                
-                # Add exponential scaling to heavily penalize large imbalances
-                error_sign = np.sign(error)
-                error_magnitude = abs(error)
-                
-                # Scale error using a function that grows faster for large errors
-                # This helps prevent state domination
-                scaled_error = error_sign * (error_magnitude + 0.1 * error_magnitude**2)
-                
-                state_rewards[state] = base_reward_scale * scaled_error
-                
-        return final_reward, state_rewards
+        # Sample a batch of experiences
+        batch = self.replay_buffer.sample(self.batch_size)
+        if batch is None:
+            # If sampling failed, skip update
+            return
+            
+        states, actions, rewards, next_states, dones = batch
+        
+        try:
+            # Compute current Q values
+            current_q_values = self.policy_net(states)
+            
+            # Compute next Q values using target network
+            with torch.no_grad():
+                next_q_values = self.target_net(next_states).max(1)[0].unsqueeze(1)
+            
+            # Compute target Q values
+            target_q_values = rewards + (1 - dones) * self.gamma * next_q_values
+            
+            # Compute loss for the entire action space
+            loss = F.mse_loss(current_q_values, target_q_values.repeat(1, current_q_values.shape[1]))
+            
+            # Update policy network
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            
+        except Exception as e:
+            print(f"Error in update_model: {e}")
+            import traceback
+            traceback.print_exc()
+            # Clear the replay buffer if we encounter errors during training
+            self.replay_buffer.clear()
+    
+    # Here are the truly adaptive changes needed in the RLPIDController class
+    # This approach avoids all hardcoded values for reward scaling and penalties
 
+    # 1. Relative penalty calculation based on reward ratio only
+    # Corrected reward function that properly incentivizes minimizing total rewards
+    def calculate_reward(self, current_diversity, ideal_diversity, current_total_rewards):
+        """Calculate reward with explicit stopping signal at optimal diversity"""
+        # Normalize diversity to [0, 1] range
+        diversity_ratio = current_diversity / ideal_diversity if ideal_diversity > 0 else 0
+        
+        # Target diversity threshold - using exactly 1.0 for "perfect" diversity
+        target_diversity = 1.0
+        near_optimal_threshold = 0.98  # Consider diversity near-optimal above this value
+        
+        # 1. BASE REWARD - reward for diversity progress, caps at target
+        base_reward = min(diversity_ratio, target_diversity)
+        
+        # # 2. PARAMETER CHANGE DETECTION
+        # # Store previous parameters if not already tracked
+        # if not hasattr(self, 'prev_pid_params'):
+        #     self.prev_pid_params = (self.p_param, self.i_param, self.d_param)
+        
+        # # Calculate parameter changes
+        # p_change = abs(self.p_param - self.prev_pid_params[0])
+        # i_change = abs(self.i_param - self.prev_pid_params[1])
+        # d_change = abs(self.d_param - self.prev_pid_params[2])
+        # total_change = p_change + i_change + d_change
+        
+        # # 3. STABILITY PENALTY - penalize any parameter changes when diversity is near-optimal
+        # stability_penalty = 0
+        # if diversity_ratio >= near_optimal_threshold:
+        #     # Stronger penalty as diversity gets closer to perfect
+        #     penalty_factor = (diversity_ratio - near_optimal_threshold) / (target_diversity - near_optimal_threshold)
+        #     # Apply penalty proportional to the magnitude of parameter changes
+        #     stability_penalty = -0.5 * penalty_factor * total_change
 
-class DQNAgent:
-    """
-    Deep Q-Network agent for learning optimal reward allocation
-    Modified for stability with target network, experience replay, 
-    and gradient clipping
-    """
-    def __init__(self, state_size, action_size, learning_rate=0.0005, 
-                 discount_factor=0.99, exploration_rate=1.0, 
-                 exploration_decay=0.997, min_exploration=0.05,
-                 target_update_frequency=100):
-        self.state_size = state_size
-        self.action_size = action_size
-        self.memory = deque(maxlen=5000)  # Larger replay buffer
-        self.learning_rate = learning_rate  # Lower learning rate for stability
-        self.gamma = discount_factor  # Higher discount factor for more long-term focus
-        self.epsilon = exploration_rate  # Exploration rate
-        self.epsilon_decay = exploration_decay  # Slower decay
-        self.epsilon_min = min_exploration  # Higher min exploration
-        
-        # Target network update frequency (in steps)
-        self.target_update_freq = target_update_frequency
-        self.update_counter = 0
-        
-        # Create the main model and target model
-        self.model = self._build_model()
-        self.target_model = self._build_model()
-        self._update_target_model()  # Initialize target model weights
-        
-        # Add training metrics
-        self.loss_history = []
-        self.avg_q_values = []
-        
-    def _build_model(self):
-        """Build a simple neural network model using numpy with xavier initialization"""
-        # Deeper network for more representation power
-        hidden_layer1 = 32
-        hidden_layer2 = 32
-        
-        # Xavier/Glorot initialization for better convergence
-        W1 = np.random.randn(self.state_size, hidden_layer1) * np.sqrt(2.0 / (self.state_size + hidden_layer1))
-        b1 = np.zeros(hidden_layer1)
-        
-        W2 = np.random.randn(hidden_layer1, hidden_layer2) * np.sqrt(2.0 / (hidden_layer1 + hidden_layer2))
-        b2 = np.zeros(hidden_layer2)
-        
-        W3 = np.random.randn(hidden_layer2, self.action_size) * np.sqrt(2.0 / (hidden_layer2 + self.action_size))
-        b3 = np.zeros(self.action_size)
-        
-        # Learning rate for SGD
-        self.lr = self.learning_rate
-        
-        return {
-            'W1': W1,
-            'b1': b1,
-            'W2': W2,
-            'b2': b2,
-            'W3': W3,
-            'b3': b3
-        }
-    
-    def _leaky_relu(self, x, alpha=0.01):
-        """Leaky ReLU for better gradient flow"""
-        return np.maximum(alpha * x, x)
-    
-    def _leaky_relu_derivative(self, x, alpha=0.01):
-        """Derivative of leaky ReLU"""
-        dx = np.ones_like(x)
-        dx[x < 0] = alpha
-        return dx
-    
-    def _forward(self, state, model=None):
-        """Forward pass through the network"""
-        if model is None:
-            model = self.model
-            
-        # Store activations for backprop if using main model
-        if model == self.model:
-            # First layer
-            self.z1 = np.dot(state, model['W1']) + model['b1']
-            self.a1 = self._leaky_relu(self.z1)
-            
-            # Second layer
-            self.z2 = np.dot(self.a1, model['W2']) + model['b2']
-            self.a2 = self._leaky_relu(self.z2)
-            
-            # Output layer
-            self.z3 = np.dot(self.a2, model['W3']) + model['b3']
-            
-            return self.z3  # Q-values
-        else:
-            # When using target network, we don't need to store activations
-            a1 = self._leaky_relu(np.dot(state, model['W1']) + model['b1'])
-            a2 = self._leaky_relu(np.dot(a1, model['W2']) + model['b2'])
-            return np.dot(a2, model['W3']) + model['b3']
-    
-    def _backward(self, state, target):
-        """Backward pass with gradient clipping for stability"""
-        # Compute gradients
-        dz3 = self.z3 - target
-        dW3 = np.dot(self.a2.T, dz3)
-        db3 = np.sum(dz3, axis=0)
-        
-        da2 = np.dot(dz3, self.model['W3'].T)
-        dz2 = da2 * self._leaky_relu_derivative(self.z2)
-        dW2 = np.dot(self.a1.T, dz2)
-        db2 = np.sum(dz2, axis=0)
-        
-        da1 = np.dot(dz2, self.model['W2'].T)
-        dz1 = da1 * self._leaky_relu_derivative(self.z1)
-        dW1 = np.dot(state.T, dz1)
-        db1 = np.sum(dz1, axis=0)
-        
-        # Calculate loss for tracking
-        loss = np.mean(np.square(dz3))
-        self.loss_history.append(loss)
-        
-        # Gradient clipping to prevent exploding gradients
-        max_grad_norm = 1.0
-        for grad in [dW1, db1, dW2, db2, dW3, db3]:
-            norm = np.sqrt(np.sum(np.square(grad)))
-            if norm > max_grad_norm:
-                grad *= max_grad_norm / norm
-        
-        # Update weights with clipped gradients
-        self.model['W3'] -= self.lr * dW3
-        self.model['b3'] -= self.lr * db3
-        self.model['W2'] -= self.lr * dW2
-        self.model['b2'] -= self.lr * db2
-        self.model['W1'] -= self.lr * dW1
-        self.model['b1'] -= self.lr * db1
-        
-        # Return loss for monitoring
-        return loss
-    
-    def _update_target_model(self):
-        """Copy main model weights to target model"""
-        for key in self.model:
-            self.target_model[key] = self.model[key].copy()
-    
-    def remember(self, state, action, reward, next_state, done):
-        """Store experience in memory"""
-        # Clip rewards for stability
-        clipped_reward = np.clip(reward, -1, 1)
-        self.memory.append((state, action, clipped_reward, next_state, done))
-    
-    def act(self, state):
-        """Act based on the current state with epsilon-greedy policy and some state normalization"""
-        # Normalize state for better stability
-        normalized_state = state / (np.max(np.abs(state)) + 1e-10)
-        
-        if np.random.rand() <= self.epsilon:
-            return np.random.randint(self.action_size)
-        
-        q_values = self._forward(normalized_state)
-        
-        # Track average Q-values for monitoring learning progress
-        self.avg_q_values.append(np.mean(q_values))
-        
-        return np.argmax(q_values[0])
-    
-    def replay(self, batch_size):
-        """Train on random batch from memory using target network for stability"""
-        if len(self.memory) < batch_size:
-            return 0  # Return 0 loss if not enough samples
-        
-        # Sample random minibatch
-        minibatch = random.sample(self.memory, batch_size)
-        
-        total_loss = 0
-        
-        for state, action, reward, next_state, done in minibatch:
-            # Normalize states
-            normalized_state = state / (np.max(np.abs(state)) + 1e-10)
-            normalized_next_state = next_state / (np.max(np.abs(next_state)) + 1e-10)
-            
-            # Double DQN: use main network to select action, target network to evaluate it
-            next_action = np.argmax(self._forward(normalized_next_state)[0])
-            
-            # Get target Q value using the target network
-            target = reward
-            if not done:
-                target_q = self._forward(normalized_next_state, self.target_model)[0][next_action]
-                target += self.gamma * target_q
-            
-            # Get current Q values and update the target for the selected action
-            target_f = self._forward(normalized_state)
-            original_val = target_f[0][action]
-            target_f[0][action] = target
-            
-            # Use Huber loss (smoother than MSE) via backpropagation
-            loss = self._backward(normalized_state, target_f)
-            total_loss += loss
-            
-            # Update target network periodically
-            self.update_counter += 1
-            if self.update_counter % self.target_update_freq == 0:
-                self._update_target_model()
-                print(f"Target network updated. Current ε: {self.epsilon:.4f}")
-            
-        # More conservative epsilon decay based on learning progress
-        if self.epsilon > self.epsilon_min:
-            # Adaptive decay: slower when loss is high (unstable), faster when loss is low (stable)
-            decay_rate = self.epsilon_decay * (1.0 + 0.1 * np.exp(-total_loss/batch_size))
-            self.epsilon = max(self.epsilon_min, self.epsilon * decay_rate)
-            
-        return total_loss / batch_size  # Return average loss
+        # Update previous parameters for next step
+        self.prev_pid_params = (self.p_param, self.i_param, self.d_param)
 
+        # # High rewards penalty
+        # total_pid = self.p_param + self.i_param + self.d_param
+        # efficiency_penalty = (total_pid**diversity_ratio)
+        
+        # Combine rewards and penalties
+        total_reward = (base_reward )
+        
+        # print("RL total reward", total_reward)
+        return total_reward
+    # 2. Fully relative reward scale adjustment
+    def apply_actions_to_pid_parameters(self, actions):
+        """Apply actions to adjust PID parameters and reward scale"""
+        # Extract actions
+        p_adjustment, i_adjustment, d_adjustment, scale_adjustment = actions
+        
+        # Use the action scale parameter as a base adjustment factor
+        # This avoids hardcoded adjustment values
+        base_adjustment = self.action_scale
+        
+        # Calculate parameter changes relative to current values
+        # This allows the system to adapt to any scale without hardcoded thresholds
+        p_change = p_adjustment * base_adjustment 
+        i_change = i_adjustment * base_adjustment 
+        d_change = d_adjustment * base_adjustment 
+        
+        # Calculate reward scale change relative to current scale
+        # Adding a small constant prevents getting stuck at zero
+        reward_scale_change = scale_adjustment * base_adjustment
+        
+        # Get current parameters
+        old_p, old_i, old_d = self.p_param, self.i_param, self.d_param
+        old_reward_scale = self.reward_scale
+        
+        # Apply changes with constraints to keep values non-negative
+        new_p = max(0, old_p + p_change)
+        new_i = max(0, old_i + i_change)
+        new_d = max(0, old_d + d_change)
+        
+        # Apply reward scale change - keep positive
+        new_reward_scale = max(0.1, old_reward_scale + reward_scale_change)
+        
+        # Update parameters
+        self.p_param, self.i_param, self.d_param = new_p, new_i, new_d
+        self.reward_scale = new_reward_scale
+        
+        # Log significant changes
+        significant_change = (
+            abs(p_change) > 0.05 * (old_p + 1.0) or 
+            abs(i_change) > 0.05 * (old_i + 1.0) or
+            abs(d_change) > 0.05 * (old_d + 1.0) or
+            abs(reward_scale_change) > 0.05 * (old_reward_scale + 1.0)
+        )
+        
+        if significant_change or self.steps_done % 100 == 0:
+            print(f"Parameters updated: P: {old_p:.1f} -> {new_p:.1f}, "
+                f"I: {old_i:.1f} -> {new_i:.1f}, D: {old_d:.1f} -> {new_d:.1f}, "
+                f"Reward Scale: {old_reward_scale:.1f} -> {new_reward_scale:.1f}")
 
-class RewardLearner:
-    """
-    RL agent that learns to allocate rewards to different states to achieve
-    optimal diversity in the multi-agent system.
-    Modified to control each state individually similar to PID in agent.py.
-    """
-    def __init__(self, possible_states, n_agents, reward_scale=1000):
-        self.env = RewardEnvironment(possible_states, n_agents)
-        self.possible_states = possible_states.copy()
-        self.n_agents = n_agents
-        self.valid_states = [s for s in possible_states if s != 'NO_STATE']
+    # 3. Adaptive bounds based on observed rewards
+    def update_adaptive_bounds(self, current_rewards):
+        """Update adaptive bounds for PID parameters based on observed rewards"""
+        # Extract the maximum absolute reward value in the current state
+        current_max_reward = max([abs(r) for r in current_rewards.values() if r != 0], default=0)
         
-        # Create a separate RL agent for each valid state
-        # Each agent will have a simpler action space (adjusting rewards up/down)
-        self.state_agents = {}
-        for state in self.valid_states:
-            # For each state, the agent receives: 
-            # 1. Current distribution across all states (state_size)
-            # 2. Error for this specific state from ideal
-            # 3. Previous reward value for this state
-            state_input_size = len(possible_states) + 2
+        # Track the max observed reward - this adapts to the system's natural scale
+        self.max_observed_reward = max(self.max_observed_reward, current_max_reward)
             
-            # Simple action space: adjust reward up or down by varying amounts
-            # Actions: strong decrease, medium decrease, slight decrease, no change,
-            #          slight increase, medium increase, strong increase
-            state_action_size = 7
+        # Keep a short history of recent max rewards
+        self.reward_history.append(current_max_reward)
+        if len(self.reward_history) > 10:  # Keep only recent history
+            self.reward_history.pop(0)
             
-            self.state_agents[state] = DQNAgent(
-                state_size=state_input_size, 
-                action_size=state_action_size,
-                learning_rate=0.0003,  # Lower learning rate for stability
-                discount_factor=0.99,
-                exploration_rate=1.0,
-                exploration_decay=0.998,
-                min_exploration=0.05
-            )
-            
-        # Reward scale (similar to base rewards in the PID version)
-        self.reward_scale = reward_scale * n_agents
+        # Calculate average of recent max rewards for stability
+        avg_max_reward = sum(self.reward_history) / max(1, len(self.reward_history))
         
-        # Mapping from actions to reward adjustments (percentage change)
-        self.reward_adjustments = np.array([
-            -0.5,   # Strong decrease (-50%)
-            -0.2,   # Medium decrease (-20%)
-            -0.05,  # Slight decrease (-5%)
-            0.0,    # No change
-            0.05,   # Slight increase (+5%)
-            0.2,    # Medium increase (+20%)
-            0.5     # Strong increase (+50%)
-        ])
+        # Update bounds based on observed rewards
+        # This lets the system discover appropriate bounds without hardcoded values
+        self.max_p = max(self.max_p, avg_max_reward * self.p_scale_factor)
+        self.max_i = max(self.max_i, avg_max_reward * self.i_scale_factor)
+        self.max_d = max(self.max_d, avg_max_reward * self.d_scale_factor)
         
-        # Keep track of current rewards for each state
-        self.current_rewards = {state: 0.0 for state in possible_states}
+        # Update I-term max based on current observed rewards
+        # This allows the I term to adapt to the system's natural scale
+        self.i_term_max = max(1.0, self.max_observed_reward * 2.0)
         
-        # PID-like error tracking
-        self.accumulated_error = {state: 0.0 for state in possible_states}
-        self.last_error = {state: 0.0 for state in possible_states}
-        
-        # For monitoring learning progress
-        self.total_adjustments = 0
-        self.training_losses = []
-        
-    def update_possible_states(self, new_states):
-        """Update when new states are added"""
-        old_states = self.possible_states.copy()
-        self.env.update_states(new_states)
-        
-        # Update internal state tracking
-        self.possible_states = new_states.copy()
-        self.valid_states = [s for s in new_states if s != 'NO_STATE']
-        
-        # Add new states to reward and error tracking
-        for state in new_states:
-            if state not in self.current_rewards:
-                self.current_rewards[state] = 0.0
-                self.accumulated_error[state] = 0.0
-                self.last_error[state] = 0.0
-        
-        # Create agents for new states
-        new_valid_states = [s for s in new_states if s not in old_states and s != 'NO_STATE']
-        for state in new_valid_states:
-            state_input_size = len(new_states) + 2
-            state_action_size = 7
-            
-            print(f"Creating new RL agent for state: {state}")
-            self.state_agents[state] = DQNAgent(
-                state_size=state_input_size, 
-                action_size=state_action_size,
-                learning_rate=0.0003,
-                discount_factor=0.99,
-                exploration_rate=0.5,  # Start with moderate exploration
-                exploration_decay=0.998,
-                min_exploration=0.05
-            )
-            
-        # Preserve existing agents but update their state input size if needed
-        if len(old_states) != len(new_states):
-            for state in self.valid_states:
-                if state in self.state_agents and state not in new_valid_states:
-                    # Existing agent needs to be updated for new state size
-                    # In a real implementation, we'd preserve the weights and update the network architecture
-                    # Here we'll just note that this would be needed
-                    print(f"Note: Agent for {state} would need architecture update for new state size")
-                    # In practice we'd need to handle this properly
+        # Log the bounds periodically
+        if self.steps_done % 100 == 0:
+            print(f"Adaptive bounds: max_p={self.max_p:.1f}, max_i={self.max_i:.1f}, "
+                f"max_d={self.max_d:.1f}, max_observed_reward={self.max_observed_reward:.1f}")
     
-    def _state_to_agent_input(self, state_dict, target_state):
-        """
-        Convert distribution dictionary to input vector for a specific state's agent
-        
-        Args:
-            state_dict: Current distribution across all states
-            target_state: The specific state this input is for
-            
-        Returns:
-            Input vector including distribution, error, and current reward
-        """
-        # Get current error from ideal
-        error = self.env.ideal_distribution[target_state] - state_dict[target_state]
-        
-        # Create input vector: all state distributions + error + current reward
-        distribution_values = [state_dict[state] for state in self.env.possible_states]
-        
-        # Normalized current reward (-1 to 1 range)
-        normalized_reward = np.tanh(self.current_rewards[target_state] / self.reward_scale)
-        
-        # Combine into input vector
-        input_vector = distribution_values + [error, normalized_reward]
-        return np.array([input_vector])
-    
-    def update_state_rewards(self, agents):
-        """
-        Calculate state rewards based on current agent distribution.
-        Similar to update_state_rewards in agent.py but using RL.
-        
-        Args:
-            agents: List of agents
-            
-        Returns:
-            Updated state rewards, accumulated error, and last error
-        """
-        # Get current distribution
-        current_distribution = self.env.observe_state(agents)
-        
-        rewards_adjustment_info = {}  # For logging
-        
-        # Update rewards for each valid state using its dedicated agent
-        for state in self.valid_states:
-            # Skip NO_STATE
-            if state == 'NO_STATE':
-                self.current_rewards[state] = 0
-                continue
-                
-            # Calculate current error (deviation from ideal)
-            ideal_share = self.env.ideal_distribution[state]
-            current_share = current_distribution[state]
-            error = ideal_share - current_share
-            
-            # Update error tracking (similar to PID controller)
-            self.accumulated_error[state] += error
-            
-            # Prepare input for this state's agent
-            agent_input = self._state_to_agent_input(current_distribution, state)
-            
-            # Get action from agent (which adjustment to make)
-            agent = self.state_agents[state]
-            action = agent.act(agent_input)
-            
-            # Apply the selected adjustment to current reward
-            adjustment = self.reward_adjustments[action]
-            
-            # Base factor related to state deviation (like P term in PID)
-            base_factor = abs(error) * self.reward_scale
-            
-            # Integrate the adjustment with current reward (with sign of error)
-            reward_delta = adjustment * base_factor * np.sign(error)
-            
-            # Update current reward
-            old_reward = self.current_rewards[state]
-            self.current_rewards[state] += reward_delta
-            
-            # Apply stabilization: limit maximum change and use absolute min/max
-            # Prevent wild fluctuations in reward
-            max_change = 0.2 * abs(old_reward) + 0.1 * self.reward_scale
-            if abs(reward_delta) > max_change:
-                reward_delta = np.sign(reward_delta) * max_change
-                self.current_rewards[state] = old_reward + reward_delta
-            
-            # Apply bounds to prevent extreme rewards
-            max_reward = 10 * self.reward_scale
-            self.current_rewards[state] = np.clip(self.current_rewards[state], -max_reward, max_reward)
-            
-            # Store info for training
-            rewards_adjustment_info[state] = {
-                'error': error,
-                'action': action,
-                'adjustment': adjustment,
-                'reward_delta': reward_delta,
-                'new_reward': self.current_rewards[state]
-            }
-            
-            # Calculate environment reward for this state (to train the agent)
-            # Reward is better when error is reduced
-            if state in self.last_error:
-                error_change = abs(self.last_error[state]) - abs(error)
-                # Positive reward for error reduction, negative for increase
-                env_reward = np.tanh(error_change * 10)
-                
-                # If error is very small, give bonus reward
-                if abs(error) < 0.05:
-                    env_reward += 0.5
-                
-                # Remember state for next update
-                next_state_input = self._state_to_agent_input(current_distribution, state)
-                
-                # Store experience in agent's memory
-                agent.remember(agent_input, action, env_reward, next_state_input, False)
-                
-                # Train on batches periodically
-                self.total_adjustments += 1
-                if self.total_adjustments % 10 == 0:  # Train every 10 adjustments
-                    loss = agent.replay(min(32, len(agent.memory)))
-                    if loss > 0:
-                        self.training_losses.append(loss)
-            
-            # Update last error for next iteration
-            self.last_error[state] = error
-            
-        # For debugging
-        if len(self.training_losses) > 0 and len(self.training_losses) % 100 == 0:
-            avg_loss = sum(self.training_losses[-100:]) / 100
-            print(f"Average loss (last 100): {avg_loss:.6f}")
-            
-        # Return the current rewards in the proper format for the simulation
-        # This already tracks accumulated errors internally similar to agent.py
-        return self.current_rewards, self.accumulated_error, self.last_error
-    
-    def format_state_rewards(self, raw_rewards, num_attributes=1):
-        """
-        Format state rewards to match the expected format in the simulation
-        
-        Args:
-            raw_rewards: Dictionary of rewards from RL agent
-            num_attributes: Number of attributes in the system
-            
-        Returns:
-            List of dictionaries in the format expected by the simulation
-        """
-        formatted_rewards = [{state: raw_rewards[state] for state in raw_rewards} 
-                             for _ in range(num_attributes)]
-        return formatted_rewards
-    
-    def get_exploration_rates(self):
-        """Get current exploration rates for all agents"""
-        return {state: agent.epsilon for state, agent in self.state_agents.items()}
-
-
-def distribute_rewards_rl(agents, possible_states, state_rewards):
-    """
-    Distribute rewards to agents based on their states.
-    This mimics the distribute_rewards function in agent.py but works with RL rewards.
-    
-    Args:
-        agents: List of Agent objects
-        possible_states: List of possible states
-        state_rewards: List of dictionaries of rewards for each attribute
-        
-    Returns:
-        Updated state_rewards_last_epoch
-    """
-    NUM_ATTRIBUTES = len(state_rewards)
-    state_rewards_last_epoch = []
-    
-    # Create a deep copy to avoid modifying original
-    for k in range(NUM_ATTRIBUTES):
-        state_rewards_last_epoch.append({state: state_rewards[k][state] for state in state_rewards[k]})
-    
-    for k in range(NUM_ATTRIBUTES):
-        state_counts = {state: 0 for state in possible_states}
+    def update_rewards_using_pid(self, agents, current_states, state_rewards):
+        """Apply PID control to update rewards based on current parameters"""
+        state_counts = {state: 0 for state in current_states}
         for agent in agents:
-            state_counts[agent.declared_state[k]] += 1
-
-        for state in possible_states:
-            if state_counts[state] > 0:
-                state_rewards_last_epoch[k][state] = state_rewards[k][state] / state_counts[state]
+            state_counts[agent.declared_state[self.attribute_idx]] += 1
+        
+        # Reset accumulated error if it gets too large (anti-windup)
+        for state, error in self.accumulated_error.items():
+            if abs(error) > self.i_term_max / max(0.001, self.i_param):
+                self.accumulated_error[state] = np.sign(error) * self.i_term_max / max(0.001, self.i_param)
+        
+        # Track total allocated rewards
+        total_rewards = 0
+        
+        # Check if we're in a state transition period
+        in_transition = hasattr(self, 'in_transition') and self.in_transition
+        
+        # Update transition progress if we're in transition mode
+        if in_transition:
+            self.transition_progress += 1.0 / self.transition_epochs
+            if self.transition_progress >= 1.0:
+                # Transition complete
+                self.in_transition = False
+                self.transition_progress = 1.0
+        
+        for state in current_states:
+            if state == 'NO_STATE':
+                state_rewards[self.attribute_idx][state] = 0
             else:
-                state_rewards_last_epoch[k][state] = state_rewards[k][state]  # No agents in this state
+                # Calculate regular PID control values
+                state_share = state_counts[state] / len(agents)
+                ideal_share = 1 / (len(current_states) - 1)  # -1 for NO_STATE
+                error = (ideal_share - state_share)
                 
-        for agent in agents:
-            agent.reward = state_rewards_last_epoch[k][agent.declared_state[k]]
+                # Update accumulated error if state exists in it, otherwise initialize it
+                if state in self.accumulated_error:
+                    self.accumulated_error[state] += error
+                else:
+                    self.accumulated_error[state] = error
+                    
+                # Get last error, default to 0 if not found
+                last_err = self.last_error.get(state, 0)
+                
+                # Apply anti-windup for I term - still needed for numerical stability
+                if abs(self.accumulated_error[state]) > self.i_term_max / max(0.001, self.i_param):
+                    self.accumulated_error[state] = np.sign(self.accumulated_error[state]) * self.i_term_max / max(0.001, self.i_param)
+                
+                # PID terms
+                p_term = self.p_param * error
+                i_term = self.i_param * self.accumulated_error[state]
+                d_term = self.d_param * (error - last_err)
+                
+                # Calculate new reward based on PID control
+                new_reward = p_term + i_term + d_term
+                
+                # Special handling during state transition
+                if in_transition and hasattr(self, 'prev_rewards'):
+                    # If this is an existing state with previous rewards
+                    if state in self.prev_rewards:
+                        # Blend old and new rewards based on transition progress
+                        # Start with mostly old rewards, gradually shift to new calculation
+                        blend_factor = self.transition_progress
+                        prev_reward = self.prev_rewards[state]
+                        
+                        # Smooth transition from old to new reward
+                        blended_reward = (1 - blend_factor) * prev_reward + blend_factor * new_reward
+                        state_rewards[self.attribute_idx][state] = blended_reward
+                        
+                        # Debug logging for major changes
+                        if abs(prev_reward - new_reward) > 100 and self.steps_done % 5 == 0:
+                            print(f"State {state}: Blending {prev_reward:.1f}->{new_reward:.1f}, using {blended_reward:.1f}")
+                    else:
+                        # For the new state, use calculated reward
+                        state_rewards[self.attribute_idx][state] = new_reward
+                else:
+                    # Standard update outside of transition
+                    state_rewards[self.attribute_idx][state] = new_reward
+                
+                # Track total rewards allocated (absolute value)
+                total_rewards += abs(state_rewards[self.attribute_idx][state])
+                
+                # Store current error as last error for next iteration
+                self.last_error[state] = error
+        
+        # Store total rewards for efficiency calculation
+        
+        self.prev_total_rewards = total_rewards
+        
+        # Update adaptive bounds based on observed rewards
+        self.update_adaptive_bounds(state_rewards[self.attribute_idx])
+        
+        return state_rewards, total_rewards
+        
+    def update_rewards(self, agents, current_states, state_rewards, current_diversity=None, 
+                    ideal_diversity=None, epoch=None, *args, **kwargs):
+        """Update rewards using RL-tuned PID control"""
+        # Increment epoch counter
+        self.epoch = epoch if epoch is not None else self.epoch + 1
+        
+        # Check if we need to update our state and action dimensions
+        states_changed = False
+        if len(current_states) != len(self.states) or set(current_states) != set(self.states):
+            print(f"State set changed: {len(self.states)} -> {len(current_states)}")
+            print(f"Old states: {self.states}")
+            print(f"New states: {current_states}")
             
-    return state_rewards_last_epoch
-
-
-def plot_exploration_rate(exploration_rates, epochs):
-    """
-    Plot the exploration rate over time
-    
-    Args:
-        exploration_rates: List of epsilon values
-        epochs: Number of epochs
-    """
-    plt.figure(figsize=(10, 6))
-    plt.plot(range(epochs), exploration_rates, linewidth=2)
-    plt.xlabel('Epoch')
-    plt.ylabel('Exploration Rate (ε)')
-    plt.title('Exploration Rate Decay Over Time')
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.ylim(0, 1.05)
-    plt.tight_layout()
-    return plt
-
-
-def plot_rl_rewards(rewards_history, epochs):
-    """
-    Plot the RL rewards over time
-    
-    Args:
-        rewards_history: List of rewards
-        epochs: Number of epochs
-    """
-    plt.figure(figsize=(10, 6))
-    plt.plot(range(epochs), rewards_history, linewidth=2)
-    plt.xlabel('Epoch')
-    plt.ylabel('RL Agent Reward')
-    plt.title('RL Agent Reward Over Time')
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.tight_layout()
-    return plt
+            # Store old dimensions
+            old_state_dim = self.state_dim
+            
+            # Update state set and dimensions
+            self.states = current_states.copy()
+            self.state_dim = len(self.states) + 4  # +3 for PID params, +1 for reward_scale
+            
+            # Update state mapping
+            self.state_to_idx = {state: i for i, state in enumerate(self.states)}
+            self.idx_to_state = {i: state for i, state in enumerate(self.states)}
+            
+            # Initialize accumulated error and last error for new states
+            for state in current_states:
+                if state not in self.accumulated_error:
+                    self.accumulated_error[state] = 0
+                    self.last_error[state] = 0
+            
+            states_changed = True
+            
+            # If state dimensions changed, preserve network weights where possible
+            if old_state_dim != self.state_dim:
+                print(f"Adapting RL model for new dimensions. State dim: {old_state_dim} -> {self.state_dim}")
+                
+                # Create new networks with updated dimensions
+                new_policy_net = DQNModel(self.state_dim, self.action_dim)
+                new_target_net = DQNModel(self.state_dim, self.action_dim)
+                
+                # Transfer existing weights for the common dimensions
+                with torch.no_grad():
+                    # Get old weights
+                    old_policy_weights = self.policy_net.fc1.weight.data
+                    old_policy_bias = self.policy_net.fc1.bias.data
+                    old_target_weights = self.target_net.fc1.weight.data
+                    old_target_bias = self.target_net.fc1.bias.data
+                    
+                    # Determine the minimum dimension to copy
+                    common_dim = min(old_state_dim, self.state_dim)
+                    
+                    # Copy weights for the first layer up to the common dimensions
+                    new_policy_net.fc1.weight.data[:, :common_dim] = old_policy_weights[:, :common_dim]
+                    new_policy_net.fc1.bias.data = old_policy_bias  # Bias dimension doesn't change
+                    
+                    new_target_net.fc1.weight.data[:, :common_dim] = old_target_weights[:, :common_dim]
+                    new_target_net.fc1.bias.data = old_target_bias  # Bias dimension doesn't change
+                    
+                    # Copy remaining layers completely (dimensions unchanged)
+                    new_policy_net.fc2.weight.data = self.policy_net.fc2.weight.data
+                    new_policy_net.fc2.bias.data = self.policy_net.fc2.bias.data
+                    new_policy_net.fc3.weight.data = self.policy_net.fc3.weight.data
+                    new_policy_net.fc3.bias.data = self.policy_net.fc3.bias.data
+                    
+                    new_target_net.fc2.weight.data = self.target_net.fc2.weight.data
+                    new_target_net.fc2.bias.data = self.target_net.fc2.bias.data
+                    new_target_net.fc3.weight.data = self.target_net.fc3.weight.data
+                    new_target_net.fc3.bias.data = self.target_net.fc3.bias.data
+                
+                # Update networks
+                self.policy_net = new_policy_net
+                self.target_net = new_target_net
+                self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.learning_rate)
+                
+                # Handle the replay buffer with different dimensions
+                if len(self.replay_buffer.buffer) > 0:
+                    print("Adapting replay buffer to new dimensions...")
+                    adapted_buffer = deque(maxlen=self.replay_buffer.buffer.maxlen)
+                    
+                    for exp in self.replay_buffer.buffer:
+                        # Handle both expansion and reduction in dimensions
+                        if self.state_dim > old_state_dim:
+                            # Expanding: Add zeros for new dimensions
+                            extended_state = list(exp.state) + [0.0] * (self.state_dim - old_state_dim)
+                            extended_next_state = list(exp.next_state) + [0.0] * (self.state_dim - old_state_dim)
+                        else:
+                            # Reducing: Truncate to fewer dimensions
+                            extended_state = list(exp.state)[:self.state_dim]
+                            extended_next_state = list(exp.next_state)[:self.state_dim]
+                        
+                        # Create new experience with adjusted states
+                        new_exp = Experience(extended_state, exp.action, exp.reward, extended_next_state, exp.done)
+                        adapted_buffer.append(new_exp)
+                    
+                    # Replace the buffer with our adapted version
+                    self.replay_buffer.buffer = adapted_buffer
+                    self.replay_buffer.state_dim = self.state_dim
+                    print(f"Adapted {len(adapted_buffer)} experiences to new dimensions")
+                
+                # Update previous state with appropriate dimensions if it exists
+                if self.prev_state is not None:
+                    if self.state_dim > old_state_dim:
+                        # Expanding: Add zeros for new dimensions
+                        self.prev_state = list(self.prev_state) + [0.0] * (self.state_dim - old_state_dim)
+                    else:
+                        # Reducing: Truncate to fewer dimensions
+                        self.prev_state = list(self.prev_state)[:self.state_dim]
+        
+        try:
+            # Update agent counts for this epoch
+            agent_counts = {state: 0 for state in current_states}
+            for agent in agents:
+                agent_state = agent.declared_state[self.attribute_idx]
+                agent_counts[agent_state] = agent_counts.get(agent_state, 0) + 1
+            self.agent_counts = agent_counts
+            
+            # Get current state representation
+            current_state = self.get_state_representation(agents, current_states)
+            
+            # Calculate current diversity ratio for stability check
+            diversity_ratio = 0
+            if current_diversity is not None and ideal_diversity is not None and ideal_diversity > 0:
+                diversity_ratio = current_diversity / ideal_diversity
+            
+            # Skip RL parameter updates during transition period, just apply current PID
+            if hasattr(self, 'in_transition') and self.in_transition:
+                # Log transition progress periodically
+                if self.steps_done % 10 == 0:
+                    print(f"In transition period: {self.transition_progress*100:.1f}% complete")
+                
+                # Apply PID control without changing parameters
+                state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
+                self.prev_total_rewards = total_rewards
+                
+                # Update transition progress
+                self.transition_progress += 1.0 / self.transition_epochs
+                if self.transition_progress >= 1.0:
+                    # Transition complete
+                    self.in_transition = False
+                    self.transition_progress = 1.0
+                    print("Transition period complete, resuming RL parameter updates")
+                
+                # Update previous state for next iteration (but not action since we didn't select one)
+                if len(current_state) == self.state_dim:
+                    self.prev_state = current_state 
+                self.prev_diversity = current_diversity if current_diversity is not None else self.prev_diversity
+                
+                # Increment step counter
+                self.steps_done += 1
+                
+                return state_rewards
+            # CHECK FOR STABILITY CONDITION - If diversity ratio is above threshold,
+            # skip RL updates and just apply the existing PID parameters
+            if diversity_ratio > 0.995:
+                # Only apply PID control with current parameters
+                if self.steps_done % 100 == 0:
+                    print(f"Diversity ratio {diversity_ratio:.3f} > 0.99 - Keeping parameters stable")
+                    print(f"Current parameters: P: {self.p_param:.1f}, I: {self.i_param:.1f}, D: {self.d_param:.1f}, "
+                        f"Reward Scale: {self.reward_scale:.1f}")
+                
+                # Skip RL learning when diversity is good, just apply PID control
+                state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
+                self.prev_total_rewards = total_rewards
+                
+                # Update previous state for next iteration (but not action since we didn't select one)
+                if len(current_state) == self.state_dim:
+                    self.prev_state = current_state 
+                self.prev_diversity = current_diversity if current_diversity is not None else self.prev_diversity
+                
+                # Increment step counter
+                self.steps_done += 1
+                
+                return state_rewards
+            
+            # If this is the first call or states changed, just store the initial state
+            if self.prev_state is None or states_changed:
+                self.prev_state = current_state
+                self.prev_diversity = current_diversity if current_diversity is not None else 0
+                # For the first step, use a default action (zero adjustment)
+                actions = np.zeros(self.action_dim)
+            else:
+                # Select action based on current state
+                actions = self.select_action(current_state)
+                
+                # Apply the selected actions to adjust parameters
+                self.apply_actions_to_pid_parameters(actions)
+                
+                # Calculate reward if diversity metrics are provided
+                if current_diversity is not None and ideal_diversity is not None:
+                    # Apply PID control first to get total rewards
+                    state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
+                    
+                    # Calculate reward based on both diversity and efficiency
+                    reward = self.calculate_reward(current_diversity, ideal_diversity, total_rewards)
+                    # pass ideal diversity to RLPIDController
+                    self.ideal_diversity = ideal_diversity
+                    # Calculate diversity ratio here
+                    diversity_ratio = current_diversity / ideal_diversity if ideal_diversity > 0 else 0
+                    
+                    # Store experience in replay buffer - only if dimensions match to avoid warnings
+                    done = False  # Not episodic in traditional sense
+                    if self.prev_action is not None and len(self.prev_action) == self.action_dim:
+                        if len(self.prev_state) == self.state_dim and len(current_state) == self.state_dim:
+                            self.replay_buffer.add(self.prev_state, self.prev_action, reward, current_state, done)
+                    
+                    # Update model periodically
+                    if self.steps_done % self.update_frequency == 0 and len(self.replay_buffer) >= self.batch_size:
+                        self.update_model()
+                    
+                    # Update target network periodically
+                    if self.steps_done % self.target_update_frequency == 0:
+                        self.target_net.load_state_dict(self.policy_net.state_dict())
+                    
+                    # Decay epsilon
+                    self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+                    
+                    # Update stored total rewards for next iteration
+                    self.prev_total_rewards = total_rewards
+                    
+                    # Store best parameters if diversity is better than previous best
+                    if diversity_ratio > self.best_diversity_ratio:
+                        self.best_diversity_ratio = diversity_ratio
+                        self.best_pid_params = (self.p_param, self.i_param, self.d_param)
+                        self.best_reward_scale = self.reward_scale
+                        print(f"New best parameters! P={self.p_param:.1f}, I={self.i_param:.1f}, D={self.d_param:.1f}, "
+                            f"Scale={self.reward_scale:.1f} (diversity ratio: {diversity_ratio:.3f})")
+                else:
+                    # No diversity metrics available, just apply PID control
+                    state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
+                    self.prev_total_rewards = total_rewards
+            
+            # Print PID parameters and performance metrics periodically
+            if self.steps_done % 20 == 0:
+                p_total = self.p_param + self.i_param + self.d_param
+                if p_total > 0:
+                    p_dist = f"P: {100*self.p_param/p_total:.1f}%, I: {100*self.i_param/p_total:.1f}%, D: {100*self.d_param/p_total:.1f}%"
+                else:
+                    p_dist = "All parameters are zero"
+                    
+                print(f"PID params: P={self.p_param:.1f}, I={self.i_param:.1f}, D={self.d_param:.1f}, Scale={self.reward_scale:.1f} | {p_dist}")
+            
+            # Update previous state and action for next iteration
+            # Only update prev_state if dimensions are compatible
+            if len(current_state) == self.state_dim:
+                self.prev_state = current_state 
+            self.prev_action = actions
+            self.prev_diversity = current_diversity if current_diversity is not None else self.prev_diversity
+            
+            # Increment step counter
+            self.steps_done += 1
+            
+            return state_rewards
+            
+        except Exception as e:
+            print(f"Error in update_rewards: {e}")
+            import traceback
+            traceback.print_exc()
+            # If there's an error, return unchanged state rewards
+            return state_rewards
