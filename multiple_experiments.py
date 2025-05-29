@@ -20,10 +20,10 @@ def parse_arguments():
     """
     parser = argparse.ArgumentParser(description='Run multiple experiments with PID or RL control')
     parser.add_argument('--num_experiments', type=int, default=1, help='Number of experiments to run')
-    parser.add_argument('--controller', type=str, default='compare', choices=['pid', 'rl', 'compare'], 
+    parser.add_argument('--controller', type=str, default='pid', choices=['pid', 'rl', 'compare'], 
                        help='Controller type: pid, rl (reinforcement learning), or compare (run both)')
-    parser.add_argument('--epochs', type=int, default=10000, help='Number of epochs per experiment')
-    parser.add_argument('--n_agents', type=int, default=1000, help='Number of agents')
+    parser.add_argument('--epochs', type=int, default=20000, help='Number of epochs per experiment')
+    parser.add_argument('--n_agents', type=int, default=100, help='Number of agents')
     
     # RL specific parameters
     parser.add_argument('--epsilon', type=float, default=1.0, help='Initial exploration rate for RL')
@@ -111,9 +111,10 @@ def main():
         print_experiment_header(i+1, num_experiments)
         
         # Define the possible states an agent can be in
-        INITIAL_STATES = ['NO_STATE', 'State_A', 'State_B', 'State_C', 'State_D']
-        NEW_STATE_NAME = 'State_E'  # The new state to be added later
-        NEW_STATE_EPOCH = round(0.05 * 1 * epochs)  # Epoch at which the new state is added
+        # INITIAL_STATES = ['NO_STATE', 'State_A', 'State_B', 'State_C', 'State_D']
+        INITIAL_STATES = ['NO_STATE', 'State_A', 'State_B', 'State_C', 'State_D', 'State_E', 'State_F', 'State_G', 'State_H']
+        NEW_STATE_NAME = 'State_NEW'  # The new state to be added later
+        NEW_STATE_EPOCH = round(0.5 * 1 * epochs)  # Epoch at which the new state is added
         
         POSSIBLE_STATES = INITIAL_STATES.copy()  # Start with initial states
         POSSIBLE_STATES.append(NEW_STATE_NAME)
@@ -147,7 +148,7 @@ def main():
         STATE_SWITCH_COSTS = {state: BASE_SWITCH_COST for state in POSSIBLE_STATES}
         # Set a high initial switch cost for the new state to ensure zero initial nodes
         STATE_SWITCH_COSTS[NEW_STATE_NAME] = BASE_SWITCH_COST * 100  # Very high switch cost initially
-        SWITCH_FREQUENCY_PARAM = 0.5
+        SWITCH_FREQUENCY_PARAM = 2.0
         
         x_axis.append(i+1)  # Store experiment number (starting from 1 for better readability)
         

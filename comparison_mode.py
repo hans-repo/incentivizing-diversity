@@ -88,8 +88,8 @@ def run_experiment(args):
     
     # Define the possible states an agent can be in
     INITIAL_STATES = ['NO_STATE', 'State_A', 'State_B', 'State_C', 'State_D']
-    NEW_STATE_NAME = 'State_E'  # The new state to be added later
-    NEW_STATE_EPOCH = round(0.05 * epochs)  # Epoch at which the new state is added
+    NEW_STATE_NAME = 'State_NEW'  # The new state to be added later
+    NEW_STATE_EPOCH = round(0.5 * epochs)  # Epoch at which the new state is added
     
     POSSIBLE_STATES = INITIAL_STATES.copy()  # Start with initial states
     POSSIBLE_STATES.append(NEW_STATE_NAME)

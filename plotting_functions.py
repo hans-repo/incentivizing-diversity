@@ -122,45 +122,113 @@ def plot_pid_parameters(epochs_list, pid_params_history, NEW_STATE_EPOCH, NEW_ST
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.show()
 
-def plot_stacked_area(agents_history, epochs, POSSIBLE_STATES):
-    """Plot stacked area chart showing agent distribution over time."""
-    # Convert agents' state history into a format suitable for stacked area
-    # Create a dictionary to store counts for each state over time
-    state_counts = {state: [] for state in POSSIBLE_STATES}
+def plot_stacked_area(agents_history, epochs, possible_states):
+    """
+    Plot a stacked area chart showing the distribution of agents across states over time.
+    Modified to handle dynamic state sets properly and avoid empty plots.
+    
+    Args:
+        agents_history: List of agent states for each epoch
+        epochs: Number of epochs to plot
+        possible_states: List of all possible states (including those added during the simulation)
+    """
+    
+    # Use only the available epochs
+    available_epochs = min(len(agents_history), epochs)
+    
+    if available_epochs == 0:
+        print("Warning: No agent history data available to plot")
+        plt.figure(figsize=(10, 6))
+        plt.title("No Agent Data Available")
+        return plt
+    
+    # Initialize state counts dictionary with all possible states
+    state_counts = {state: np.zeros(available_epochs) for state in possible_states}
     
     # Count agents in each state for each epoch
-    for epoch_states in agents_history:
-        # Reset counts for this epoch
-        current_counts = {state: 0 for state in POSSIBLE_STATES}
+    for epoch in range(available_epochs):
+        # Skip if there's no data for this epoch
+        if epoch >= len(agents_history) or not agents_history[epoch]:
+            continue
+            
+        # Count agents in each state for this epoch
+        for agent_state in agents_history[epoch]:
+            if agent_state in state_counts:
+                state_counts[agent_state][epoch] += 1
+    
+    # Filter out NO_STATE and find states that actually have agents
+    states_to_plot = []
+    state_data_to_plot = []
+    
+    for state in possible_states:
+        if state != 'NO_STATE' and np.any(state_counts[state] > 0):
+            states_to_plot.append(state)
+            # Ensure all arrays have the same length
+            state_data = state_counts[state][:available_epochs]
+            # Pad with zeros if necessary (shouldn't be needed but safety check)
+            if len(state_data) < available_epochs:
+                padded_data = np.zeros(available_epochs)
+                padded_data[:len(state_data)] = state_data
+                state_data = padded_data
+            state_data_to_plot.append(state_data)
+    
+    # If no states have any agents, show an empty plot with a message
+    if not states_to_plot:
+        plt.title("No Agents Found in Any State")
+        plt.xlabel('Epoch')
+        plt.ylabel('Number of Agents')
+        return plt
+    
+    # Create a consistent color map for states
+    cmap = plt.cm.get_cmap('tab10', len(states_to_plot) + 1)  # +1 to avoid repeating first color
+    colors = [cmap(i) for i in range(len(states_to_plot))]
+    
+    # Verify all arrays have the same length before plotting
+    for i, data in enumerate(state_data_to_plot):
+        if len(data) != available_epochs:
+            print(f"Warning: State {states_to_plot[i]} has data length {len(data)}, expected {available_epochs}")
+            # Fix the length
+            if len(data) < available_epochs:
+                padded_data = np.zeros(available_epochs)
+                padded_data[:len(data)] = data
+                state_data_to_plot[i] = padded_data
+            else:
+                state_data_to_plot[i] = data[:available_epochs]
+    
+    # Create the stacked area plot with verified data
+    try:
+        plt.stackplot(range(available_epochs),
+                     *state_data_to_plot,  # Unpack the list of arrays
+                     labels=states_to_plot,
+                     colors=colors,
+                     alpha=0.7)
+    except ValueError as e:
+        print(f"Error creating stackplot: {e}")
+        print(f"Available epochs: {available_epochs}")
+        print(f"States to plot: {len(states_to_plot)}")
+        print(f"Data shapes: {[len(data) for data in state_data_to_plot]}")
         
-        # Count agents in each state
-        for agent_state in epoch_states:
-            if agent_state in current_counts:
-                current_counts[agent_state] += 1
-        
-        # Append counts to the state_counts lists
-        for state in POSSIBLE_STATES:
-            state_counts[state].append(current_counts[state])
+        # Fallback: create a simple line plot instead
+        for i, (state, data) in enumerate(zip(states_to_plot, state_data_to_plot)):
+            plt.plot(range(available_epochs), data, label=state, color=colors[i])
+        plt.fill_between(range(available_epochs), 0, sum(state_data_to_plot), alpha=0.3)
     
-    # Create x axis for epochs
-    epochs_range = list(range(epochs))
-    
-    # Plot the stacked area
-    plt.stackplot(epochs_range, 
-                 [state_counts[state] for state in POSSIBLE_STATES],
-                 labels=POSSIBLE_STATES)
-    
-    plt.xlabel('Epochs')
+    plt.xlabel('Epoch')
     plt.ylabel('Number of Agents')
+    plt.title('Evolution of Agent States Over Epochs')
     
-    # Only include non-zero states in the legend
-    handles, labels = plt.gca().get_legend_handles_labels()
-    non_zero_indices = [i for i, state in enumerate(POSSIBLE_STATES) 
-                       if max(state_counts[state]) > 0]
-    plt.legend([handles[i] for i in non_zero_indices], 
-              [labels[i] for i in non_zero_indices],
-              loc='upper right')
+    # Only add legend if we have states to plot
+    if states_to_plot:
+        plt.legend(loc='upper right')
+        
+    plt.grid(True, linestyle='--', alpha=0.5)
 
+    # Set x-ticks to show reasonable intervals
+    step_size = max(1, available_epochs // 10)
+    plt.xticks(range(0, available_epochs + 1, step_size))
+    
+    return plt
+    
 def plot_agent_distribution(agents_declared_history, epochs_list, POSSIBLE_STATES, NEW_STATE_EPOCH, 
                           NEW_STATE_NAME, controller_type, k=0):
     """Plot stacked area chart showing agent distribution for a specific attribute."""

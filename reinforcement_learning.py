@@ -323,13 +323,24 @@ class RLPIDController(RewardController):
         for agent in agents:
             state_counts[agent.declared_state[self.attribute_idx]] += 1
         
-        # Convert to distribution (percentage in each state)
-        state_vector = np.zeros(len(self.state_to_idx))
+        # Update state mappings if they don't match current states
+        if set(current_states) != set(self.state_to_idx.keys()):
+            print(f"Updating state mappings: {len(self.state_to_idx)} -> {len(current_states)} states")
+            self.state_to_idx = {state: i for i, state in enumerate(current_states)}
+            self.idx_to_state = {i: state for i, state in enumerate(current_states)}
         
-        # Ensure we only include states that we know about in our state representation
+        # Create state vector with correct size based on current states
+        state_vector = np.zeros(len(current_states))
+        
+        # Fill in the state distribution
         for state, count in state_counts.items():
-            if state in self.state_to_idx:  # Only include known states
-                state_vector[self.state_to_idx[state]] = count / self.n_agents
+            if state in self.state_to_idx:
+                idx = self.state_to_idx[state]
+                # Safety check to prevent index out of bounds
+                if idx < len(state_vector):
+                    state_vector[idx] = count / self.n_agents
+                else:
+                    print(f"Warning: State {state} has index {idx} but vector size is {len(state_vector)}")
         
         # Use logarithmic normalization for PID parameters to handle a wide range of values
         # Add a small constant to avoid log(0)
@@ -349,10 +360,19 @@ class RLPIDController(RewardController):
         # Combine state vector with normalized parameters
         full_state = np.append(state_vector, [norm_p, norm_i, norm_d, norm_reward_scale])
         
+        # Update expected state dimension based on current states
+        expected_state_dim = len(current_states) + 4  # +3 for PID params, +1 for reward_scale
+        
+        # If state dimension changed, update it
+        if self.state_dim != expected_state_dim:
+            print(f"State dimension changed: {self.state_dim} -> {expected_state_dim}")
+            self.state_dim = expected_state_dim
+        
         # Verify that the state vector has the expected dimension
         if len(full_state) != self.state_dim:
             print(f"Warning: State dimension mismatch in get_state_representation. Got {len(full_state)}, expected {self.state_dim}")
-            print(f"State vector length: {len(state_vector)}, state_to_idx length: {len(self.state_to_idx)}")
+            print(f"Current states: {len(current_states)}, state vector length: {len(state_vector)}")
+            
             # Adjust the state vector to match expected dimension
             if len(full_state) < self.state_dim:
                 # Pad with zeros if too short
@@ -362,6 +382,7 @@ class RLPIDController(RewardController):
                 full_state = full_state[:self.state_dim]
         
         return full_state.tolist()  # Convert to list for consistent serialization
+
     
     def select_action(self, state):
         """Select action using epsilon-greedy policy with conservative bounds"""
@@ -654,12 +675,13 @@ class RLPIDController(RewardController):
             
             # Store old dimensions
             old_state_dim = self.state_dim
+            old_states = self.states.copy()
             
             # Update state set and dimensions
-            self.states = current_states.copy()
+            self.states = list(current_states)  # Convert to list to ensure consistent ordering
             self.state_dim = len(self.states) + 4  # +3 for PID params, +1 for reward_scale
             
-            # Update state mapping
+            # Update state mapping - IMPORTANT: Use consistent ordering
             self.state_to_idx = {state: i for i, state in enumerate(self.states)}
             self.idx_to_state = {i: state for i, state in enumerate(self.states)}
             
@@ -688,14 +710,30 @@ class RLPIDController(RewardController):
                     old_target_bias = self.target_net.fc1.bias.data
                     
                     # Determine the minimum dimension to copy
-                    common_dim = min(old_state_dim, self.state_dim)
+                    # For states, we need to be more careful about which states to preserve
+                    old_state_count = len(old_states)
+                    new_state_count = len(self.states)
+                    common_state_count = min(old_state_count, new_state_count)
                     
-                    # Copy weights for the first layer up to the common dimensions
-                    new_policy_net.fc1.weight.data[:, :common_dim] = old_policy_weights[:, :common_dim]
-                    new_policy_net.fc1.bias.data = old_policy_bias  # Bias dimension doesn't change
+                    # Copy weights for the common state dimensions (first part of input)
+                    new_policy_net.fc1.weight.data[:, :common_state_count] = old_policy_weights[:, :common_state_count]
+                    new_target_net.fc1.weight.data[:, :common_state_count] = old_target_weights[:, :common_state_count]
                     
-                    new_target_net.fc1.weight.data[:, :common_dim] = old_target_weights[:, :common_dim]
-                    new_target_net.fc1.bias.data = old_target_bias  # Bias dimension doesn't change
+                    # Copy the PID parameter weights (last 4 dimensions)
+                    # These should always be in the same position relative to the end
+                    pid_param_start_old = old_state_count
+                    pid_param_start_new = new_state_count
+                    
+                    if old_state_dim >= 4 and self.state_dim >= 4:
+                        # Copy PID parameter weights
+                        new_policy_net.fc1.weight.data[:, pid_param_start_new:pid_param_start_new+4] = \
+                            old_policy_weights[:, pid_param_start_old:pid_param_start_old+4]
+                        new_target_net.fc1.weight.data[:, pid_param_start_new:pid_param_start_new+4] = \
+                            old_target_weights[:, pid_param_start_old:pid_param_start_old+4]
+                    
+                    # Copy bias (doesn't depend on input dimension)
+                    new_policy_net.fc1.bias.data = old_policy_bias
+                    new_target_net.fc1.bias.data = old_target_bias
                     
                     # Copy remaining layers completely (dimensions unchanged)
                     new_policy_net.fc2.weight.data = self.policy_net.fc2.weight.data
@@ -719,19 +757,35 @@ class RLPIDController(RewardController):
                     adapted_buffer = deque(maxlen=self.replay_buffer.buffer.maxlen)
                     
                     for exp in self.replay_buffer.buffer:
-                        # Handle both expansion and reduction in dimensions
-                        if self.state_dim > old_state_dim:
-                            # Expanding: Add zeros for new dimensions
-                            extended_state = list(exp.state) + [0.0] * (self.state_dim - old_state_dim)
-                            extended_next_state = list(exp.next_state) + [0.0] * (self.state_dim - old_state_dim)
-                        else:
-                            # Reducing: Truncate to fewer dimensions
-                            extended_state = list(exp.state)[:self.state_dim]
-                            extended_next_state = list(exp.next_state)[:self.state_dim]
-                        
-                        # Create new experience with adjusted states
-                        new_exp = Experience(extended_state, exp.action, exp.reward, extended_next_state, exp.done)
-                        adapted_buffer.append(new_exp)
+                        try:
+                            # Create new state representations based on the dimension change
+                            old_state_part = list(exp.state)[:old_state_count]  # Old state distribution
+                            old_pid_part = list(exp.state)[old_state_count:old_state_count+4]  # PID params
+                            
+                            old_next_state_part = list(exp.next_state)[:old_state_count]
+                            old_next_pid_part = list(exp.next_state)[old_state_count:old_state_count+4]
+                            
+                            # Create new state representation
+                            if new_state_count > old_state_count:
+                                # Adding states - pad state distribution with zeros
+                                new_state_part = old_state_part + [0.0] * (new_state_count - old_state_count)
+                                new_next_state_part = old_next_state_part + [0.0] * (new_state_count - old_state_count)
+                            else:
+                                # Removing states - truncate state distribution
+                                new_state_part = old_state_part[:new_state_count]
+                                new_next_state_part = old_next_state_part[:new_state_count]
+                            
+                            # Combine with PID parameters
+                            extended_state = new_state_part + old_pid_part
+                            extended_next_state = new_next_state_part + old_next_pid_part
+                            
+                            # Create new experience with adjusted states
+                            new_exp = Experience(extended_state, exp.action, exp.reward, extended_next_state, exp.done)
+                            adapted_buffer.append(new_exp)
+                            
+                        except (IndexError, ValueError) as e:
+                            print(f"Skipping experience due to adaptation error: {e}")
+                            continue
                     
                     # Replace the buffer with our adapted version
                     self.replay_buffer.buffer = adapted_buffer
@@ -740,13 +794,20 @@ class RLPIDController(RewardController):
                 
                 # Update previous state with appropriate dimensions if it exists
                 if self.prev_state is not None:
-                    if self.state_dim > old_state_dim:
-                        # Expanding: Add zeros for new dimensions
-                        self.prev_state = list(self.prev_state) + [0.0] * (self.state_dim - old_state_dim)
-                    else:
-                        # Reducing: Truncate to fewer dimensions
-                        self.prev_state = list(self.prev_state)[:self.state_dim]
-        
+                    try:
+                        old_state_part = self.prev_state[:old_state_count]
+                        old_pid_part = self.prev_state[old_state_count:old_state_count+4] if len(self.prev_state) >= old_state_count + 4 else [0, 0, 0, 0]
+                        
+                        if new_state_count > old_state_count:
+                            new_state_part = old_state_part + [0.0] * (new_state_count - old_state_count)
+                        else:
+                            new_state_part = old_state_part[:new_state_count]
+                        
+                        self.prev_state = new_state_part + old_pid_part
+                    except (IndexError, ValueError) as e:
+                        print(f"Error adapting prev_state: {e}, resetting to None")
+                        self.prev_state = None
+
         try:
             # Update agent counts for this epoch
             agent_counts = {state: 0 for state in current_states}
@@ -790,6 +851,7 @@ class RLPIDController(RewardController):
                 self.steps_done += 1
                 
                 return state_rewards
+            
             # CHECK FOR STABILITY CONDITION - If diversity ratio is above threshold,
             # skip RL updates and just apply the existing PID parameters
             if diversity_ratio > 0.995:
@@ -812,6 +874,92 @@ class RLPIDController(RewardController):
                 self.steps_done += 1
                 
                 return state_rewards
+            
+            # If this is the first call or states changed, just store the initial state
+            if self.prev_state is None or states_changed:
+                self.prev_state = current_state
+                self.prev_diversity = current_diversity if current_diversity is not None else 0
+                # For the first step, use a default action (zero adjustment)
+                actions = np.zeros(self.action_dim)
+            else:
+                # Select action based on current state
+                actions = self.select_action(current_state)
+                
+                # Apply the selected actions to adjust parameters
+                self.apply_actions_to_pid_parameters(actions)
+                
+                # Calculate reward if diversity metrics are provided
+                if current_diversity is not None and ideal_diversity is not None:
+                    # Apply PID control first to get total rewards
+                    state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
+                    
+                    # Calculate reward based on both diversity and efficiency
+                    reward = self.calculate_reward(current_diversity, ideal_diversity, total_rewards)
+                    # pass ideal diversity to RLPIDController
+                    self.ideal_diversity = ideal_diversity
+                    # Calculate diversity ratio here
+                    diversity_ratio = current_diversity / ideal_diversity if ideal_diversity > 0 else 0
+                    
+                    # Store experience in replay buffer - only if dimensions match to avoid warnings
+                    done = False  # Not episodic in traditional sense
+                    if self.prev_action is not None and len(self.prev_action) == self.action_dim:
+                        if len(self.prev_state) == self.state_dim and len(current_state) == self.state_dim:
+                            self.replay_buffer.add(self.prev_state, self.prev_action, reward, current_state, done)
+                    
+                    # Update model periodically
+                    if self.steps_done % self.update_frequency == 0 and len(self.replay_buffer) >= self.batch_size:
+                        self.update_model()
+                    
+                    # Update target network periodically
+                    if self.steps_done % self.target_update_frequency == 0:
+                        self.target_net.load_state_dict(self.policy_net.state_dict())
+                    
+                    # Decay epsilon
+                    self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+                    
+                    # Update stored total rewards for next iteration
+                    self.prev_total_rewards = total_rewards
+                    
+                    # Store best parameters if diversity is better than previous best
+                    if diversity_ratio > self.best_diversity_ratio:
+                        self.best_diversity_ratio = diversity_ratio
+                        self.best_pid_params = (self.p_param, self.i_param, self.d_param)
+                        self.best_reward_scale = self.reward_scale
+                        print(f"New best parameters! P={self.p_param:.1f}, I={self.i_param:.1f}, D={self.d_param:.1f}, "
+                            f"Scale={self.reward_scale:.1f} (diversity ratio: {diversity_ratio:.3f})")
+                else:
+                    # No diversity metrics available, just apply PID control
+                    state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
+                    self.prev_total_rewards = total_rewards
+            
+            # Print PID parameters and performance metrics periodically
+            if self.steps_done % 20 == 0:
+                p_total = self.p_param + self.i_param + self.d_param
+                if p_total > 0:
+                    p_dist = f"P: {100*self.p_param/p_total:.1f}%, I: {100*self.i_param/p_total:.1f}%, D: {100*self.d_param/p_total:.1f}%"
+                else:
+                    p_dist = "All parameters are zero"
+                    
+                print(f"PID params: P={self.p_param:.1f}, I={self.i_param:.1f}, D={self.d_param:.1f}, Scale={self.reward_scale:.1f} | {p_dist}")
+            
+            # Update previous state and action for next iteration
+            # Only update prev_state if dimensions are compatible
+            if len(current_state) == self.state_dim:
+                self.prev_state = current_state 
+            self.prev_action = actions
+            self.prev_diversity = current_diversity if current_diversity is not None else self.prev_diversity
+            
+            # Increment step counter
+            self.steps_done += 1
+            
+            return state_rewards
+            
+        except Exception as e:
+            print(f"Error in update_rewards: {e}")
+            import traceback
+            traceback.print_exc()
+            # If there's an error, return unchanged state rewards
+            return state_rewards
             
             # If this is the first call or states changed, just store the initial state
             if self.prev_state is None or states_changed:
