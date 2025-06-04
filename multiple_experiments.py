@@ -7,6 +7,7 @@ from agent import *
 from measurement_functions import *
 from ziegler_nichols_tuning import *
 from reinforcement_learning import PIDController, RLPIDController
+from reinforcement_learning_nopid import RLDirectRewardController
 from plotting_functions import *
 
 # Configuration for the experiment 
@@ -20,20 +21,18 @@ def parse_arguments():
     """
     parser = argparse.ArgumentParser(description='Run multiple experiments with PID or RL control')
     parser.add_argument('--num_experiments', type=int, default=1, help='Number of experiments to run')
-    parser.add_argument('--controller', type=str, default='pid', choices=['pid', 'rl', 'compare'], 
-                       help='Controller type: pid, rl (reinforcement learning), or compare (run both)')
-    parser.add_argument('--epochs', type=int, default=20000, help='Number of epochs per experiment')
+    parser.add_argument('--controller', type=str, default='rl', 
+                       choices=['pid', 'rl', 'rlnopid', 'compare'], 
+                       help='Controller type: pid (fixed PID), rl (RL-tuned PID), rlnopid (RL direct reward control), or compare')
+    parser.add_argument('--epochs', type=int, default=10000, help='Number of epochs per experiment')
     parser.add_argument('--n_agents', type=int, default=100, help='Number of agents')
     
     # RL specific parameters
     parser.add_argument('--epsilon', type=float, default=1.0, help='Initial exploration rate for RL')
-    parser.add_argument('--epsilon_decay', type=float, default=0.9, help='Decay rate for exploration')
+    parser.add_argument('--epsilon_decay', type=float, default=0.9995, help='Decay rate for exploration')
     parser.add_argument('--learning_rate', type=float, default=0.1, help='Learning rate for RL')
-    parser.add_argument('--action_scale', type=float, default=0.1, 
+    parser.add_argument('--action_scale', type=float, default=0.3, 
                        help='Scale factor for RL actions (lower = smaller adjustments)')
-    parser.add_argument('--efficiency_weight', type=float, default=0.0001,
-                       help='Weight for reward efficiency vs diversity (0.0-1.0, higher = more emphasis on minimizing rewards)')
-    
     # PID specific parameters
     parser.add_argument('--p_param', type=float, default=1000, help='P parameter for PID controller')
     parser.add_argument('--i_param', type=float, default=100, help='I parameter for PID controller')
@@ -45,7 +44,7 @@ def parse_arguments():
     parser.add_argument('--initial_i', type=float, default=1.0, help='Initial I parameter for RL-tuned PID')
     parser.add_argument('--initial_d', type=float, default=1.0, help='Initial D parameter for RL-tuned PID')
     
-    # New PID scale factor parameters (configurable instead of hardcoded)
+    # PID scale factor parameters (for RL-tuned PID)
     parser.add_argument('--p_scale_factor', type=float, default=5.0, 
                         help='Scale factor for P parameter relative to reward_scale')
     parser.add_argument('--i_scale_factor', type=float, default=1.0, 
@@ -53,9 +52,13 @@ def parse_arguments():
     parser.add_argument('--d_scale_factor', type=float, default=1.0, 
                         help='Scale factor for D parameter relative to reward_scale')
     
+    # Comparison mode options
+    parser.add_argument('--compare_modes', type=str, nargs='+', 
+                       choices=['pid', 'rl', 'rlnopid'], 
+                       default=['pid', 'rl', 'rlnopid'],
+                       help='Which controllers to compare (default: pid rl). Options: pid, rl, rlnopid')
+    
     return parser.parse_args()
-
-
 
 def main():
     """
@@ -112,26 +115,22 @@ def main():
         
         # Define the possible states an agent can be in
         # INITIAL_STATES = ['NO_STATE', 'State_A', 'State_B', 'State_C', 'State_D']
-        INITIAL_STATES = ['NO_STATE', 'State_A', 'State_B', 'State_C', 'State_D', 'State_E', 'State_F', 'State_G', 'State_H']
+        # INITIAL_STATES = ['NO_STATE', 'State_A', 'State_B', 'State_C', 'State_D', 'State_E', 'State_F', 'State_G', 'State_H']
+        INITIAL_STATES = ['NO_STATE', 'State_A', 'State_B', 'State_C', 'State_D', 'State_E', 'State_F', 'State_G', 'State_H', 'State_I', 'State_J', 'State_K', 'State_L']
         NEW_STATE_NAME = 'State_NEW'  # The new state to be added later
         NEW_STATE_EPOCH = round(0.5 * 1 * epochs)  # Epoch at which the new state is added
         
         POSSIBLE_STATES = INITIAL_STATES.copy()  # Start with initial states
         POSSIBLE_STATES.append(NEW_STATE_NAME)
         NUM_STATES = len(POSSIBLE_STATES)
-        PER_NODE_REWARD_BASE = 1000
-        PER_NODE_REWARD = PER_NODE_REWARD_BASE  # Per node reward per epoch in an evenly distributed system
-        
-        # Define fixed rewards for each state
-        BASE_REWARDS = PER_NODE_REWARD_BASE * N_AGENTS / (NUM_STATES-1)  # -1 for NO_STATE
-        
+
         # PID parameters (will be replaced by tuning if tune_pid is True)
         REWARDS_ADAPTIVE_PARAM = args.p_param
         REWARDS_INTEGRAL_PARAM = args.i_param
         REWARDS_DERIVATIVE_PARAM = args.d_param
         
         BASE_RUN_COST = 100 + 0
-        RUN_COST_CEILING = BASE_RUN_COST + 2*BASE_RUN_COST + BASE_RUN_COST*0
+        RUN_COST_CEILING = BASE_RUN_COST + round(380*BASE_RUN_COST)
         BASE_SWITCH_COST = BASE_RUN_COST
 
         # Generate evenly spaced values for initial states
@@ -142,13 +141,12 @@ def main():
         }
         
         # Add run cost for the new state that will be added later
-        # Set a high initial run cost to discourage early adoption
-        STATE_RUN_COSTS[NEW_STATE_NAME] = round(BASE_RUN_COST + 1.5*BASE_RUN_COST, 4)
+        STATE_RUN_COSTS[NEW_STATE_NAME] = round(BASE_RUN_COST + RUN_COST_CEILING, 4)
         
         STATE_SWITCH_COSTS = {state: BASE_SWITCH_COST for state in POSSIBLE_STATES}
         # Set a high initial switch cost for the new state to ensure zero initial nodes
         STATE_SWITCH_COSTS[NEW_STATE_NAME] = BASE_SWITCH_COST * 100  # Very high switch cost initially
-        SWITCH_FREQUENCY_PARAM = 2.0
+        SWITCH_FREQUENCY_PARAM = 0.0 + i*0.5
         
         x_axis.append(i+1)  # Store experiment number (starting from 1 for better readability)
         
@@ -170,7 +168,7 @@ def main():
             if i == 0 and args.tune_pid and tuned_pid_params is None:
                 print("\n=== Running Ziegler-Nichols tuning for experiment", i+1, "===")
                 REWARDS_ADAPTIVE_PARAM, REWARDS_INTEGRAL_PARAM, REWARDS_DERIVATIVE_PARAM = ziegler_nichols_tuning(
-                    None, INITIAL_STATES, BASE_REWARDS, epochs=epochs, n_agents=N_AGENTS)
+                    None, INITIAL_STATES, epochs=epochs, n_agents=N_AGENTS)
                 
                 # Store the tuned parameters for subsequent experiments
                 tuned_pid_params = (REWARDS_ADAPTIVE_PARAM, REWARDS_INTEGRAL_PARAM, REWARDS_DERIVATIVE_PARAM)
@@ -191,13 +189,14 @@ def main():
                 REWARDS_INTEGRAL_PARAM,
                 REWARDS_DERIVATIVE_PARAM
             )
-        
+
         elif controller_type == "rl":
+            # RL-tuned PID mode
             print_rl_parameters(args.epsilon, args.epsilon_decay, args.learning_rate, args.action_scale, 
-                              args.efficiency_weight, args.initial_p, args.initial_i, args.initial_d,
-                              args.p_scale_factor, args.i_scale_factor, args.d_scale_factor)
+                            args.initial_p, args.initial_i, args.initial_d,
+                            args.p_scale_factor, args.i_scale_factor, args.d_scale_factor)
             
-            # Initialize the RL-tuned PID controller without reward_scale parameter
+            # Initialize the RL-tuned PID controller
             reward_controller = RLPIDController(
                 POSSIBLE_STATES,
                 N_AGENTS,
@@ -210,7 +209,6 @@ def main():
                 action_scale=args.action_scale,
                 update_frequency=5,
                 batch_size=16,
-                reward_efficiency_weight=args.efficiency_weight,
                 p_scale_factor=args.p_scale_factor,
                 i_scale_factor=args.i_scale_factor,
                 d_scale_factor=args.d_scale_factor
@@ -218,7 +216,29 @@ def main():
             
             # Initialize with zeros for PID params in the tracking array (will be updated during run)
             all_pid_params.append((args.initial_p, args.initial_i, args.initial_d))
-        
+
+        elif controller_type == "rlnopid":
+            # Direct reward control mode
+            print("\n=== Using RL Direct Reward Control (no PID) ===")
+            print(f"  • Epsilon: {args.epsilon}")
+            print(f"  • Epsilon decay: {args.epsilon_decay}")
+            print(f"  • Learning rate: {args.learning_rate}")
+            print(f"  • Action scale: {args.action_scale}")
+
+            # Initialize the RL direct reward controller
+            reward_controller = RLDirectRewardController(
+                POSSIBLE_STATES,
+                N_AGENTS,
+                epsilon=args.epsilon,
+                epsilon_decay=args.epsilon_decay,
+                learning_rate=args.learning_rate,
+                action_scale=args.action_scale,
+                update_frequency=5,
+                batch_size=16
+            )
+            
+            # For tracking purposes, use zeros for PID params
+            all_pid_params.append((0, 0, 0))
         # Create initial agents with only initial states
         agents = generate_agents(N_AGENTS, INITIAL_STATES, state_rewards, STATE_RUN_COSTS, STATE_SWITCH_COSTS, SWITCH_FREQUENCY_PARAM)
         agents_real_history = [[] for _ in range(NUM_ATTRIBUTES)]
@@ -241,9 +261,6 @@ def main():
             if epoch == NEW_STATE_EPOCH:
                 # Reset the switch cost for the new state to normal level
                 STATE_SWITCH_COSTS[NEW_STATE_NAME] = BASE_SWITCH_COST
-                
-                # Initialize the new state with normal reward based on new state count
-                BASE_REWARDS_NEW = PER_NODE_REWARD_BASE * N_AGENTS / len(POSSIBLE_STATES)
                 
                 # Update agents to know about the new state
                 for agent in agents:
@@ -296,8 +313,7 @@ def main():
                         batch_size=16,
                         p_scale_factor=args.p_scale_factor,
                         i_scale_factor=args.i_scale_factor,
-                        d_scale_factor=args.d_scale_factor,
-                        reward_efficiency_weight=args.efficiency_weight
+                        d_scale_factor=args.d_scale_factor
                     )
                     
                     # Set the learned reward scale
@@ -363,7 +379,7 @@ def main():
                     state_rewards[k][NEW_STATE_NAME] = 0
                 
                 # Print info about the new state
-                print_new_state_added(NEW_STATE_NAME, epoch, BASE_REWARDS_NEW, len(POSSIBLE_STATES), 
+                print_new_state_added(NEW_STATE_NAME, epoch, len(POSSIBLE_STATES), 
                                     STATE_SWITCH_COSTS[NEW_STATE_NAME])
             
             # Keep track of which states were available at this epoch (for proper diversity calculation)
@@ -372,7 +388,7 @@ def main():
             
             # Calculate current diversity for RL reward calculation
             current_diversity = None
-            if controller_type == "rl" and epoch > 0:
+            if (controller_type == "rl" or controller_type == "rlnopid") and epoch > 0:
                 diversity_result = calculate_diversity(
                     [agents_declared_history[0]], [epoch-1], 
                     states_available_at_epoch[epoch-1], N_AGENTS)
@@ -388,6 +404,7 @@ def main():
             # Get ideal diversity for current set of states
             ideal_diversity = get_ideal_diversity(current_states)
                 
+            # Update rewards based on current state distribution using the appropriate controller
             # Update rewards based on current state distribution using the appropriate controller
             if controller_type == "pid":
                 # Use PID controller to update rewards
@@ -430,6 +447,35 @@ def main():
                 )
                 
                 # Calculate total rewards allocated correctly
+                total_rewards = 0
+                for state in current_states:
+                    total_rewards += state_rewards[0][state]
+                
+                # Store the calculated total rewards
+                total_rewards_history.append(total_rewards)
+                reward_per_state_history.append(state_rewards[0].copy())
+
+            elif controller_type == "rlnopid":
+                # Use RL direct reward controller to update rewards
+                state_rewards = reward_controller.update_rewards(
+                    agents, current_states, state_rewards,
+                    current_diversity=current_diversity, 
+                    ideal_diversity=ideal_diversity,
+                    epoch=epoch
+                )
+                
+                # No PID parameters to track
+                pid_params_history.append((0, 0, 0))
+                
+                # Track the direct rewards being used
+                if hasattr(reward_controller, 'current_rewards'):
+                    current_rewards_snapshot = reward_controller.current_rewards.copy()
+                    # You can store this in a separate history if needed
+                
+                # Update the tracking array with zeros for PID params
+                all_pid_params[i] = (0, 0, 0)
+                
+                # Calculate total rewards allocated
                 total_rewards = 0
                 for state in current_states:
                     total_rewards += state_rewards[0][state]
@@ -648,7 +694,7 @@ def main():
             
             # Print final results and analysis using new metrics
             from plotting_functions import print_single_experiment_results
-            print_single_experiment_results(POSSIBLE_STATES, state_rewards_last_epoch, BASE_REWARDS, 
+            print_single_experiment_results(POSSIBLE_STATES, state_rewards_last_epoch, 
                                           controller_type, total_rewards_history, pid_params_history,
                                           reward_controller)
             

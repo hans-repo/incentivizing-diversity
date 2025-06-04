@@ -1,1 +1,1 @@
-- It seems like the RL is increasing its reward function in the negative as fast as possible.
+sometimes when the new state is added, the RL maintains rewards for STATE_NEW at 0, making the system never converge since there needs to be some agents moving to the new state. However sometimes it works and converges after the new state.

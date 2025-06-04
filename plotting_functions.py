@@ -13,11 +13,11 @@ def plot_diversity_over_time(final_diversity, epochs_list, NUM_ATTRIBUTES, NEW_S
     for k in range(NUM_ATTRIBUTES):
         # Extract diversity values from dictionary
         diversity_values = [final_diversity[k][epoch][0] for epoch in epochs_list]  # [0] to get the first (and only) value
-        plt.plot(epochs_list, diversity_values, label=f"Diversity - Attribute {k}")
+        plt.plot(epochs_list, diversity_values, label=f"Diversity - Attribute")
     
     # Add vertical line to mark when new state was added
     plt.axvline(x=NEW_STATE_EPOCH, color='r', linestyle='--', 
-                label=f"New state ({NEW_STATE_NAME}) added")
+                label=f"New state added")
     
     # Add horizontal line for ideal diversity before and after new state
     ideal_before = get_ideal_diversity(INITIAL_STATES)
@@ -32,11 +32,11 @@ def plot_diversity_over_time(final_diversity, epochs_list, NUM_ATTRIBUTES, NEW_S
     
     # Adjust title based on controller type
     if controller_type == "pid":
-        plt.title(f'Diversity with PID (P={REWARDS_ADAPTIVE_PARAM:.1f}, I={REWARDS_INTEGRAL_PARAM:.1f}, D={REWARDS_DERIVATIVE_PARAM:.1f})')
+        plt.title(f'Diversity with Ziegler-Nichols-tuned PID')
+    elif controller_type == "rlnopid":
+        plt.title(f'Diversity with Pure RL rewards')
     else:
-        # Use the final PID parameters for the title
-        final_p, final_i, final_d = pid_params_history[-1]
-        plt.title(f'Diversity with RL-tuned PID (Final P={final_p:.1f}, I={final_i:.1f}, D={final_d:.1f})')
+        plt.title(f'Diversity with RL-tuned PID')
         
     plt.legend(loc='lower right')
     plt.grid(True, linestyle='--', alpha=0.5)
@@ -51,19 +51,19 @@ def plot_total_rewards(epochs_list, total_rewards_history, NEW_STATE_EPOCH, NEW_
     
     # Add vertical line for when new state was added
     plt.axvline(x=NEW_STATE_EPOCH, color='r', linestyle='--', 
-                label=f"New state ({NEW_STATE_NAME}) added")
+                label=f"New state added")
     
     plt.xlabel('Epochs')
     plt.ylabel('Total Rewards')
     
     # Adjust title based on controller type
     if controller_type == "pid":
-        plt.title(f'Total Rewards Allocated with PID (P={REWARDS_ADAPTIVE_PARAM:.1f}, I={REWARDS_INTEGRAL_PARAM:.1f}, D={REWARDS_DERIVATIVE_PARAM:.1f})')
+        plt.title(f'Total Rewards Allocated with Ziegler-Nichols-tuned PID')
+    elif controller_type == "rlnopid":
+        plt.title(f'Total Rewards Allocated with Pure RL rewards')
     else:
-        # Use the final PID parameters for the title
-        final_p, final_i, final_d = pid_params_history[-1]
-        plt.title(f'Total Rewards Allocated with RL-tuned PID (Final P={final_p:.1f}, I={final_i:.1f}, D={final_d:.1f})')
-    
+        plt.title(f'Total Rewards Allocated with RL-tuned PID')
+
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.show()
@@ -87,19 +87,19 @@ def plot_rewards_per_state(epochs_list, reward_per_state_history, POSSIBLE_STATE
     
     # Add vertical line for when new state was added
     plt.axvline(x=NEW_STATE_EPOCH, color='r', linestyle='--', 
-              label=f"New state ({NEW_STATE_NAME}) added")
+              label=f"New state added")
     
     plt.xlabel('Epochs')
     plt.ylabel('Reward Value')
     
     # Adjust title based on controller type
     if controller_type == "pid":
-        plt.title(f'Rewards Per State with PID (P={REWARDS_ADAPTIVE_PARAM:.1f}, I={REWARDS_INTEGRAL_PARAM:.1f}, D={REWARDS_DERIVATIVE_PARAM:.1f})')
+        plt.title(f'Rewards Per State with Ziegler-Nichols-tuned PID')
+    elif controller_type == "rlnopid":
+        plt.title(f'Rewards Per State with Pure RL rewards')
     else:
-        # Use the final PID parameters for the title
-        final_p, final_i, final_d = pid_params_history[-1]
-        plt.title(f'Rewards Per State with RL-tuned PID (Final P={final_p:.1f}, I={final_i:.1f}, D={final_d:.1f})')
-    
+        plt.title(f'Rewards Per State with RL-tuned PID')
+
     plt.legend(loc='upper right')
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.show()
@@ -113,7 +113,7 @@ def plot_pid_parameters(epochs_list, pid_params_history, NEW_STATE_EPOCH, NEW_ST
     
     # Add vertical line for when new state was added
     plt.axvline(x=NEW_STATE_EPOCH, color='k', linestyle='--', 
-              label=f"New state ({NEW_STATE_NAME}) added")
+              label=f"New state added")
     
     plt.xlabel('Epochs')
     plt.ylabel('Parameter Value')
@@ -240,10 +240,15 @@ def plot_agent_distribution(agents_declared_history, epochs_list, POSSIBLE_STATE
     
     # Add vertical line for when new state was added
     plt.axvline(x=NEW_STATE_EPOCH, color='r', linestyle='--', 
-              label=f"New state ({NEW_STATE_NAME}) added")
+              label=f"New state added")
     
-    controller_name = "PID Controller" if controller_type == "pid" else "RL-tuned PID Controller"
-    plt.title(f"Agent Distribution Over Time with {controller_name}")
+    if controller_type == "pid":
+        plt.title(f'Agent Distribution Over Time with Ziegler-Nichols-tuned PID')
+    elif controller_type == "rlnopid":
+        plt.title(f'Agent Distribution Over Time with Pure RL rewards')
+    else:
+        plt.title(f'Agent Distribution Over Time with RL-tuned PID')
+
     plt.legend(loc='upper right')
     plt.tight_layout()
     plt.show()
@@ -354,7 +359,7 @@ def plot_largest_state_share(x_axis, largest_state_all_experiments, NUM_ATTRIBUT
     plt.figure(figsize=(10, 6))
     for k in range(NUM_ATTRIBUTES):
         plt.plot(x_axis, largest_state_all_experiments[k], 'o-', 
-                linewidth=2, label=f"Attribute {k}")
+                linewidth=2, label=f"Attribute")
     plt.xlabel('Experiment Number')
     plt.ylabel('Largest State Share')
     plt.title('Largest State Metric Across Experiments')
@@ -390,17 +395,17 @@ def plot_average_diversity(x_axis, average_diversity_by_experiment, NUM_ATTRIBUT
     """Plot average diversity across experiments."""
     plt.figure(figsize=(10, 6))
     for k in range(NUM_ATTRIBUTES):
-        plt.plot(x_axis, average_diversity_by_experiment[k], 'o-', 
-                linewidth=2, label=f"Attribute {k}")
-    plt.xlabel('Experiment Number')
-    plt.ylabel('Average Diversity (last 25% of epochs)')
-    plt.title(f'Diversity Across Experiments with {controller_type.upper()} Controller')
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.legend()
+        x_axis = np.arange(0, len(average_diversity_by_experiment[k])) * 20
+        plt.plot(x_axis, average_diversity_by_experiment[k], 'x-', label="Average Diversity")
+    plt.xlabel('Cost factor between cheapest and most expensive state ')
+    plt.ylabel('Diversity')
+    plt.title(f'Diversity Across Experiments with {controller_type.upper()}')
     plt.xticks(x_axis)
     if ideal_div is not None:
+        plt.axhline(y=ideal_div, color='g', linestyle=':', label=f"Ideal diversity")
         plt.ylim(0, ideal_div+0.2)
     plt.tight_layout()
+    plt.legend()
     plt.show()
 
 # New functions added from multiple_experiments.py
@@ -418,7 +423,7 @@ def print_pid_parameters(p, i, d):
     print(f"I: {i}")
     print(f"D: {d}")
 
-def print_rl_parameters(epsilon, epsilon_decay, learning_rate, action_scale, efficiency_weight,
+def print_rl_parameters(epsilon, epsilon_decay, learning_rate, action_scale,
                       initial_p, initial_i, initial_d, p_scale_factor, i_scale_factor, d_scale_factor):
     """Print RL controller parameters."""
     print("\n=== Initializing RL-tuned PID controller ===")
@@ -426,16 +431,14 @@ def print_rl_parameters(epsilon, epsilon_decay, learning_rate, action_scale, eff
     print(f"Epsilon decay: {epsilon_decay}")
     print(f"Learning rate: {learning_rate}")
     print(f"Action scale: {action_scale}")
-    print(f"Efficiency weight: {efficiency_weight}")
     print(f"Initial PID parameters: P={initial_p}, I={initial_i}, D={initial_d}")
     print(f"PID scale factors: P={p_scale_factor}, I={i_scale_factor}, D={d_scale_factor}")
     print(f"PID parameters will be adaptively adjusted based on system behavior")
 
-def print_new_state_added(new_state_name, epoch, base_rewards_new, num_states, switch_cost):
+def print_new_state_added(new_state_name, epoch, num_states, switch_cost):
     """Print information when a new state is added."""
     print(f"\nAdding new state {new_state_name} at epoch {epoch}")
-    print(f"New state added: {new_state_name}")
-    print(f"Updated BASE_REWARDS: {base_rewards_new}")
+    print(f"New state added")
     print(f"Total states now: {num_states}")
     print(f"Switch cost for {new_state_name}: {switch_cost}")
 
@@ -450,13 +453,14 @@ def print_epoch_status(epoch, state_counts, state_rewards_last_epoch, total_rewa
     if controller_type == "pid" and reward_controller:
         print(f"accumulated error : {reward_controller.accumulated_error}")
         print(f"last error : {reward_controller.last_error}")
+        print(f"PID params: P={reward_controller.p_param:.1f}, I={reward_controller.i_param:.1f}, D={reward_controller.d_param:.1f}")
+
     elif controller_type == "rl" and reward_controller:
         print(f"RL exploration rate (epsilon): {reward_controller.epsilon:.4f}")
         print(f"RL steps done: {reward_controller.steps_done}")
         print(f"Current PID parameters: P={reward_controller.p_param:.1f}, "
               f"I={reward_controller.i_param:.1f}, D={reward_controller.d_param:.1f}")
-    
-    # Print current diversity if provided
+     # Print current diversity if provided
     if diversity is not None:
         print(f"Current diversity: {diversity}")
 
@@ -466,14 +470,13 @@ def print_new_state_status(epoch, new_state_epoch, new_state_name, state_counts,
         print(f"Agents in new state {new_state_name}: {state_counts.get(new_state_name, 0)}")
         print(f"Current reward for {new_state_name}: {state_rewards_last_epoch[0].get(new_state_name, 0)}")
 
-def print_single_experiment_results(POSSIBLE_STATES, state_rewards_last_epoch, BASE_REWARDS, 
+def print_single_experiment_results(POSSIBLE_STATES, state_rewards_last_epoch,
                                   controller_type, total_rewards_history, pid_params_history=None,
                                   reward_controller=None):
     """Print final results for a single experiment."""
     print("\n=== Final Results ===")
     print("Final states in system:", POSSIBLE_STATES)
     print("Rewards per state at the end:", state_rewards_last_epoch)
-    print("Initial base rewards:", BASE_REWARDS)
     print(f"Final ideal diversity ({len(POSSIBLE_STATES)-1} states):", get_ideal_diversity(POSSIBLE_STATES))
     print(f"Final total rewards allocated: {total_rewards_history[-1]}")
     
@@ -659,7 +662,7 @@ def print_multi_experiment_header(num_experiments, controller_type):
     print("\n\n" + "="*60)
     print(f"{'':^10}SUMMARY RESULTS FOR {num_experiments} EXPERIMENTS{'':^10}")
 
-def print_single_experiment_results(states, state_rewards_last_epoch, base_rewards, 
+def print_single_experiment_results(states, state_rewards_last_epoch,
                                   controller_type, total_rewards_history, pid_params_history,
                                   reward_controller):
     """Print final results and analysis for a single experiment"""
@@ -668,7 +671,6 @@ def print_single_experiment_results(states, state_rewards_last_epoch, base_rewar
     print("="*60)
     
     num_active_states = len([state for state in states if state != 'NO_STATE'])
-    ideal_reward_per_state = base_rewards
     total_rewards_allocated = sum([state_rewards_last_epoch[0][state] for state in states])
     
     print(f"\nFinal state rewards (last epoch):")
@@ -679,7 +681,6 @@ def print_single_experiment_results(states, state_rewards_last_epoch, base_rewar
     
     print(f"\nEfficiency metrics:")
     print(f"  • Total rewards allocated: {total_rewards_allocated:.2f}")
-    print(f"  • Ideal rewards per state: {ideal_reward_per_state:.2f}")
     print(f"  • Number of active states: {num_active_states}")
     
     avg_total_rewards = sum(total_rewards_history[-100:]) / min(100, len(total_rewards_history))
@@ -772,15 +773,15 @@ def plot_side_by_side_diversity(pid_diversity, rl_diversity, epochs_list, NUM_AT
         
         # Plot PID with solid line
         plt.plot(pid_epochs, pid_values, color=pid_color, linestyle='-', 
-                 label=f"PID - Attribute {k}")
+                 label=f"PID - Attribute")
         
         # Plot RL with dashed line
         plt.plot(rl_epochs, rl_values, color=rl_color, linestyle='--', 
-                 label=f"RL - Attribute {k}")
+                 label=f"RL - Attribute")
     
     # Add vertical line for new state addition
     plt.axvline(x=NEW_STATE_EPOCH, color='r', linestyle=':', 
-                label=f"New state ({NEW_STATE_NAME}) added")
+                label=f"New state added")
     
     # Add horizontal lines for ideal diversity
     ideal_before = get_ideal_diversity(INITIAL_STATES)
@@ -828,7 +829,7 @@ def plot_rewards_comparison(pid_rewards, rl_rewards, epochs_list, NEW_STATE_EPOC
     
     # Add vertical line for new state addition
     plt.axvline(x=NEW_STATE_EPOCH, color='k', linestyle=':', 
-                label=f"New state ({NEW_STATE_NAME}) added")
+                label=f"New state added")
     
     plt.title('Total Rewards Comparison: PID vs RL-tuned PID')
     plt.xlabel('Epochs')
@@ -877,7 +878,7 @@ def plot_rl_pid_parameter_evolution(pid_params_history, epochs_list, NEW_STATE_E
     
     # Add vertical line for new state addition
     plt.axvline(x=NEW_STATE_EPOCH, color='k', linestyle='--', 
-                label=f"New state ({NEW_STATE_NAME}) added")
+                label=f"New state added")
     
     plt.title('PID Parameter Evolution in RL-tuned Controller')
     plt.xlabel('Epochs')
@@ -1232,7 +1233,7 @@ def plot_metric_over_time_comparison(metric_name, pid_values, rl_values, epochs_
     
     # Add vertical line for new state addition
     plt.axvline(x=NEW_STATE_EPOCH, color='k', linestyle=':', 
-                label=f"New state ({NEW_STATE_NAME}) added")
+                label=f"New state added")
     
     plt.title(f'{metric_name} Comparison: PID vs RL-tuned PID')
     plt.xlabel('Epochs')
@@ -1241,3 +1242,372 @@ def plot_metric_over_time_comparison(metric_name, pid_values, rl_values, epochs_
     plt.grid(True, linestyle='--', alpha=0.5)
     
     return plt
+
+def compare_and_visualize_all_controllers(comparison_results, args):
+    """
+    Compare and visualize the results from all controllers (PID, RL, RL-no-PID).
+    
+    Parameters:
+    -----------
+    comparison_results : dict
+        Dictionary containing results from all controllers
+    args : argparse.Namespace
+        Command line arguments
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from measurement_functions import get_ideal_diversity
+    
+    print(f"Comparison results keys: {list(comparison_results.keys())}")  # Debug print
+    print(f"Number of controllers being compared: {len(comparison_results)}")  # Debug print
+    
+    # Extract common parameters from the first available result
+    first_result = list(comparison_results.values())[0]
+    epochs = first_result['epochs']
+    epochs_list = list(range(epochs))
+    NEW_STATE_EPOCH = first_result['NEW_STATE_EPOCH']
+    NEW_STATE_NAME = first_result['NEW_STATE_NAME']
+    INITIAL_STATES = first_result['INITIAL_STATES']
+    POSSIBLE_STATES = first_result['POSSIBLE_STATES']
+    
+    print("\n\n" + "="*80)
+    print(f"{'':^10}COMPARISON RESULTS: ALL CONTROLLERS{'':^10}")
+    print("="*80)
+    
+    # Plot comparisons
+    plot_diversity_comparison_all_controllers(comparison_results, epochs_list, NEW_STATE_EPOCH, 
+                                            NEW_STATE_NAME, INITIAL_STATES, POSSIBLE_STATES)
+    
+    plot_rewards_comparison_all_controllers(comparison_results, epochs_list, NEW_STATE_EPOCH, 
+                                          NEW_STATE_NAME)
+    
+    plot_pid_parameters_comparison(comparison_results, epochs_list, NEW_STATE_EPOCH, 
+                                 NEW_STATE_NAME)
+    
+    # Print summary statistics
+    print_comparison_summary_statistics(comparison_results, epochs, INITIAL_STATES, POSSIBLE_STATES)
+
+def plot_diversity_comparison_all_controllers(comparison_results, epochs_list, NEW_STATE_EPOCH, 
+                                            NEW_STATE_NAME, INITIAL_STATES, POSSIBLE_STATES):
+    """
+    Plot diversity over time comparison for all controllers.
+    """
+    import matplotlib.pyplot as plt
+    from measurement_functions import get_ideal_diversity
+    
+    # Define colors and labels for each controller
+    colors = {
+        'pid': 'blue',
+        'rl': 'orange', 
+        'rlnopid': 'green'
+    }
+    
+    labels = {
+        'pid': 'Ziegler-Nichols-tuned PID',
+        'rl': 'RL-tuned PID',
+        'rlnopid': 'Pure RL'
+    }
+    
+    plt.figure(figsize=(14, 8))
+    
+    print(f"Plotting diversity for controllers: {list(comparison_results.keys())}")  # Debug print
+    
+    for controller_type, results in comparison_results.items():
+        print(f"Processing controller: {controller_type}")  # Debug print
+        # Extract diversity values for the first attribute
+        diversity_values = [results['final_diversity'][0][epoch][0] for epoch in epochs_list 
+                           if epoch in results['final_diversity'][0]]
+        
+        print(f"Controller {controller_type} has {len(diversity_values)} diversity values")  # Debug print
+        
+        # Plot with appropriate styling
+        plt.plot(epochs_list[:len(diversity_values)], diversity_values, 
+                color=colors[controller_type], linestyle='-', linewidth=2,
+                label=labels[controller_type])
+    
+    # Add vertical line for new state addition
+    plt.axvline(x=NEW_STATE_EPOCH, color='red', linestyle=':', linewidth=2,
+                label=f"New state added")
+    
+    # Add horizontal lines for ideal diversity
+    ideal_before = get_ideal_diversity(INITIAL_STATES)
+    ideal_after = get_ideal_diversity(POSSIBLE_STATES)
+    plt.axhline(y=ideal_before, color='gray', linestyle='-.', alpha=0.7,
+                label=f"Ideal diversity - {len(INITIAL_STATES)-1} states")
+    plt.axhline(y=ideal_after, color='gray', linestyle='-', alpha=0.7,
+                label=f"Ideal diversity - {len(POSSIBLE_STATES)-1} states")
+    
+    plt.title('Diversity Comparison: All Controllers', fontsize=16, fontweight='bold')
+    plt.xlabel('Epochs', fontsize=12)
+    plt.ylabel('Diversity (Shannon Entropy)', fontsize=12)
+    plt.legend(loc='lower right', fontsize=10)
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.show()
+
+def plot_rewards_comparison_all_controllers(comparison_results, epochs_list, NEW_STATE_EPOCH, 
+                                          NEW_STATE_NAME):
+    """
+    Plot total rewards over time comparison for all controllers.
+    """
+    import matplotlib.pyplot as plt
+    
+    # Define colors and labels for each controller
+    colors = {
+        'pid': 'blue',
+        'rl': 'orange',
+        'rlnopid': 'green'
+    }
+    
+    labels = {
+        'pid': 'Ziegler-Nichols-tuned PID',
+        'rl': 'RL-tuned PID',
+        'rlnopid': 'Pure RL'
+    }
+    
+    plt.figure(figsize=(14, 8))
+    
+    for controller_type, results in comparison_results.items():
+        total_rewards = results['total_rewards_history']
+        
+        plt.plot(epochs_list[:len(total_rewards)], total_rewards, 
+                color=colors[controller_type], linestyle='-', linewidth=2,
+                label=labels[controller_type])
+    
+    # Add vertical line for new state addition
+    plt.axvline(x=NEW_STATE_EPOCH, color='red', linestyle=':', linewidth=2,
+                label=f"New state added")
+    
+    plt.title('Total Rewards Comparison: All Controllers', fontsize=16, fontweight='bold')
+    plt.xlabel('Epochs', fontsize=12)
+    plt.ylabel('Total Rewards Allocated', fontsize=12)
+    plt.legend(loc='upper right', fontsize=10)
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.show()
+
+def plot_pid_parameters_comparison(comparison_results, epochs_list, NEW_STATE_EPOCH, 
+                                 NEW_STATE_NAME):
+    """
+    Show PID parameter evolution for PID and RL controllers only (ignore RL-no-PID).
+    """
+    import matplotlib.pyplot as plt
+    
+    # Only include controllers that use PID parameters
+    controllers_with_pid = ['pid', 'rl']
+    available_pid_controllers = [c for c in controllers_with_pid if c in comparison_results]
+    
+    if len(available_pid_controllers) == 0:
+        print("No controllers with PID parameters found for comparison.")
+        return
+    
+    # Define colors for PID controllers
+    colors = {
+        'pid': 'blue',
+        'rl': 'orange'
+    }
+    
+    labels = {
+        'pid': 'Ziegler-Nichols-tuned PID',
+        'rl': 'RL-tuned PID'
+    }
+    
+    fig, axes = plt.subplots(3, 1, figsize=(14, 12))
+    
+    # Plot P, I, D parameters separately
+    param_names = ['P Parameter', 'I Parameter', 'D Parameter']
+    param_indices = [0, 1, 2]
+    
+    for i, (param_name, param_idx) in enumerate(zip(param_names, param_indices)):
+        ax = axes[i]
+        
+        for controller_type in available_pid_controllers:
+            results = comparison_results[controller_type]
+            pid_params_history = results['pid_params_history']
+            
+            # Extract parameter values
+            param_values = [params[param_idx] for params in pid_params_history]
+            
+            # Plot parameter evolution
+            ax.plot(epochs_list[:len(param_values)], param_values, 
+                   color=colors[controller_type], linestyle='-', linewidth=2,
+                   label=labels[controller_type])
+            
+            # Add vertical line for new state addition
+            ax.axvline(x=NEW_STATE_EPOCH, color='red', linestyle=':', linewidth=1,
+                      alpha=0.7)
+        
+        ax.set_title(f'{param_name} Evolution', fontsize=14, fontweight='bold')
+        ax.set_xlabel('Epochs', fontsize=12)
+        ax.set_ylabel('Parameter Value', fontsize=12)
+        ax.legend(fontsize=10)
+        ax.grid(True, linestyle='--', alpha=0.5)
+    
+    # Add a main title and new state annotation
+    fig.suptitle('PID Parameter Evolution: PID vs RL-tuned PID', fontsize=16, fontweight='bold')
+    
+    # Add annotation for new state addition
+    axes[0].annotate(f'New state: {NEW_STATE_NAME}', 
+                    xy=(NEW_STATE_EPOCH, axes[0].get_ylim()[1] * 0.9), 
+                    xytext=(NEW_STATE_EPOCH + len(epochs_list) * 0.05, axes[0].get_ylim()[1] * 0.9),
+                    arrowprops=dict(arrowstyle='->', color='red', alpha=0.7),
+                    fontsize=10, color='red')
+    
+    plt.tight_layout()
+    plt.show()
+
+def print_comparison_summary_statistics(comparison_results, epochs, INITIAL_STATES, POSSIBLE_STATES):
+    """
+    Print summary statistics for all controllers and relative performance comparison.
+    """
+    import numpy as np
+    from measurement_functions import get_ideal_diversity
+    
+    ideal_after = get_ideal_diversity(POSSIBLE_STATES)
+    
+    # Define labels
+    labels = {
+        'pid': 'Ziegler-Nichols-tuned PID',
+        'rl': 'RL-tuned PID',
+        'rlnopid': 'Pure RL'
+    }
+    
+    print("\n" + "="*80)
+    print("SUMMARY STATISTICS")
+    print("="*80)
+    
+    # Collect metrics for all controllers
+    controller_metrics = {}
+    
+    for controller_type, results in comparison_results.items():
+        print(f"\n{labels[controller_type].upper()}:")
+        print("-" * 40)
+        
+        # Calculate final diversity metrics
+        diversity_values = [results['final_diversity'][0][epoch][0] for epoch in range(epochs)]
+        final_diversity = diversity_values[-1]
+        avg_diversity_last_25pct = np.mean(diversity_values[-int(epochs*0.25):])
+        
+        # Calculate reward metrics
+        total_rewards = results['total_rewards_history']
+        final_total_rewards = total_rewards[-1]
+        avg_rewards_last_25pct = np.mean(total_rewards[-int(epochs*0.25):])
+        
+        # Store metrics for comparison
+        controller_metrics[controller_type] = {
+            'final_diversity': final_diversity,
+            'avg_diversity': avg_diversity_last_25pct,
+            'final_rewards': final_total_rewards,
+            'avg_rewards': avg_rewards_last_25pct,
+            'diversity_ratio': final_diversity / ideal_after if ideal_after > 0 else 0
+        }
+        
+        # Print metrics
+        print(f"  • Final diversity: {final_diversity:.4f} bits")
+        print(f"  • Avg diversity (last 25%): {avg_diversity_last_25pct:.4f} bits")
+        print(f"  • Final total rewards: {final_total_rewards:.2f}")
+        print(f"  • Avg total rewards (last 25%): {avg_rewards_last_25pct:.2f}")
+        print(f"  • Diversity achievement: {controller_metrics[controller_type]['diversity_ratio']*100:.1f}% of ideal")
+        
+        # Print controller-specific info
+        if controller_type == 'pid':
+            pid_params = results['pid_params']
+            print(f"  • PID parameters: P={pid_params[0]:.1f}, I={pid_params[1]:.1f}, D={pid_params[2]:.1f}")
+        elif controller_type == 'rl':
+            final_pid_params = results['final_pid_params']
+            print(f"  • Final RL-tuned PID: P={final_pid_params[0]:.1f}, I={final_pid_params[1]:.1f}, D={final_pid_params[2]:.1f}")
+        elif controller_type == 'rlnopid':
+            print(f"  • Uses direct reward control (no PID parameters)")
+    
+    # Print relative performance comparison
+    if 'pid' in controller_metrics:
+        print("\n" + "="*80)
+        print("RELATIVE PERFORMANCE COMPARISON")
+        print("="*80)
+        
+        pid_metrics = controller_metrics['pid']
+        
+        print(f"\nUsing PID Controller as baseline:")
+        print("-" * 40)
+        
+        for controller_type, metrics in controller_metrics.items():
+            if controller_type == 'pid':
+                continue
+                
+            # Calculate relative performance
+            diversity_improvement = ((metrics['final_diversity'] - pid_metrics['final_diversity']) 
+                                   / pid_metrics['final_diversity']) * 100
+            reward_change = ((metrics['avg_rewards'] - pid_metrics['avg_rewards']) 
+                           / pid_metrics['avg_rewards']) * 100
+            
+            print(f"\n{labels[controller_type]}:")
+            print(f"  • Diversity improvement: {diversity_improvement:+.1f}%")
+            print(f"  • Reward allocation change: {reward_change:+.1f}%")
+    
+    # Print convergence and adaptation metrics
+    print_convergence_adaptation_metrics(comparison_results, epochs, INITIAL_STATES, POSSIBLE_STATES, labels)
+    
+    print("\n" + "="*80)
+    print("COMPARISON COMPLETE")
+    print("="*80)
+
+def print_convergence_adaptation_metrics(comparison_results, epochs, INITIAL_STATES, POSSIBLE_STATES, labels):
+    """
+    Print convergence and adaptation metrics for all controllers.
+    """
+    import numpy as np
+    from measurement_functions import get_ideal_diversity
+    
+    ideal_before = get_ideal_diversity(INITIAL_STATES)
+    ideal_after = get_ideal_diversity(POSSIBLE_STATES)
+    
+    # Extract NEW_STATE_EPOCH from results
+    first_result = list(comparison_results.values())[0]
+    NEW_STATE_EPOCH = first_result['NEW_STATE_EPOCH']
+    
+    print("\n" + "="*80)
+    print("CONVERGENCE AND ADAPTATION METRICS")
+    print("="*80)
+    
+    for controller_type, results in comparison_results.items():
+        print(f"\n{labels[controller_type]}:")
+        print("-" * 40)
+        
+        diversity_values = [results['final_diversity'][0][epoch][0] for epoch in range(epochs)]
+        
+        # Phase 1 convergence (before new state)
+        phase1_values = diversity_values[:NEW_STATE_EPOCH]
+        if len(phase1_values) > 0:
+            phase1_target = ideal_before * 0.9  # 90% of ideal
+            phase1_convergence = None
+            for i, val in enumerate(phase1_values):
+                if val >= phase1_target:
+                    phase1_convergence = i
+                    break
+            
+            if phase1_convergence is not None:
+                print(f"  • Phase 1 convergence time: {phase1_convergence} epochs")
+            else:
+                print(f"  • Phase 1: Did not reach 90% of ideal diversity")
+        
+        # Phase 2 adaptation (after new state)
+        phase2_values = diversity_values[NEW_STATE_EPOCH:]
+        if len(phase2_values) > 0:
+            phase2_target = ideal_after * 0.9  # 90% of new ideal
+            phase2_convergence = None
+            for i, val in enumerate(phase2_values):
+                if val >= phase2_target:
+                    phase2_convergence = i
+                    break
+            
+            if phase2_convergence is not None:
+                print(f"  • Phase 2 convergence time: {phase2_convergence} epochs after state addition")
+            else:
+                print(f"  • Phase 2: Did not reach 90% of new ideal diversity")
+            
+            # Calculate adaptation shock (immediate impact of new state)
+            if len(phase1_values) > 10 and len(phase2_values) > 10:
+                pre_change_avg = np.mean(phase1_values[-10:])  # Last 10 epochs before change
+                immediate_impact = phase2_values[0]  # First epoch after change
+                adaptation_shock = ((pre_change_avg - immediate_impact) / pre_change_avg) * 100
+                print(f"  • Adaptation shock: {adaptation_shock:.1f}% diversity drop")

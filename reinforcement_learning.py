@@ -116,6 +116,10 @@ class DQNModel(nn.Module):
         x = F.relu(self.fc2(x))
         # Use tanh to constrain output between -1 and 1 for smoother actions
         return torch.tanh(self.fc3(x))
+    # def forward(self, x):
+    #     x = F.relu(self.fc1(x))
+    #     x = F.relu(self.fc2(x))
+    #     return self.fc3(x)  
     
     def _initialize_weights(self):
         """Initialize weights with smaller values for more cautious initial behavior"""
@@ -179,7 +183,7 @@ class PIDController(RewardController):
                 
                 # Update rewards
                 state_rewards[self.attribute_idx][state] = p_term + i_term + d_term
-                
+            
                 # Store current error as last error for next iteration
                 self.last_error[state] = error
         
@@ -193,12 +197,13 @@ class RLPIDController(RewardController):
                  epsilon=1.0, epsilon_decay=0.995, 
                  epsilon_min=0.01, gamma=0.99, learning_rate=0.001, batch_size=32, 
                  update_frequency=10, target_update_frequency=100, attribute_idx=0,
-                 action_scale=0.1, reward_efficiency_weight=0.3,
+                 action_scale=0.1,
                  p_scale_factor=None, i_scale_factor=None, d_scale_factor=None):
         super(RLPIDController, self).__init__(states, attribute_idx)
         
         # RL parameters
         self.n_agents = n_agents
+        self.initial_epsilon = epsilon
         self.epsilon = epsilon  # Exploration rate
         self.epsilon_decay = epsilon_decay
         self.epsilon_min = epsilon_min
@@ -208,10 +213,6 @@ class RLPIDController(RewardController):
         self.update_frequency = update_frequency
         self.target_update_frequency = target_update_frequency
         self.action_scale = action_scale  # Control the magnitude of PID parameter adjustments
-        
-        # Weight for balancing diversity vs efficiency in reward function
-        # Higher values give more weight to minimizing total rewards
-        self.reward_efficiency_weight = reward_efficiency_weight
         
         # PID parameters (initialized to zeros or passed values)
         self.p_param = initial_p
@@ -312,10 +313,6 @@ class RLPIDController(RewardController):
         # Update I-term max based on current reward scale
         self.i_term_max = self.reward_scale * 5
         
-        # Log if bounds have been updated significantly
-        if self.steps_done % 100 == 0:
-            print(f"Adaptive bounds: max_p={self.max_p:.1f}, max_i={self.max_i:.1f}, max_d={self.max_d:.1f}, reward_scale={self.reward_scale:.1f}")
-    
     def get_state_representation(self, agents, current_states):
         """Create state representation: [agent distribution, P, I, D, reward_scale]"""
         # Get agent distribution
@@ -455,33 +452,6 @@ class RLPIDController(RewardController):
         # 1. BASE REWARD - reward for diversity progress, caps at target
         base_reward = min(diversity_ratio, target_diversity)
         
-        # # 2. PARAMETER CHANGE DETECTION
-        # # Store previous parameters if not already tracked
-        # if not hasattr(self, 'prev_pid_params'):
-        #     self.prev_pid_params = (self.p_param, self.i_param, self.d_param)
-        
-        # # Calculate parameter changes
-        # p_change = abs(self.p_param - self.prev_pid_params[0])
-        # i_change = abs(self.i_param - self.prev_pid_params[1])
-        # d_change = abs(self.d_param - self.prev_pid_params[2])
-        # total_change = p_change + i_change + d_change
-        
-        # # 3. STABILITY PENALTY - penalize any parameter changes when diversity is near-optimal
-        # stability_penalty = 0
-        # if diversity_ratio >= near_optimal_threshold:
-        #     # Stronger penalty as diversity gets closer to perfect
-        #     penalty_factor = (diversity_ratio - near_optimal_threshold) / (target_diversity - near_optimal_threshold)
-        #     # Apply penalty proportional to the magnitude of parameter changes
-        #     stability_penalty = -0.5 * penalty_factor * total_change
-
-        # Update previous parameters for next step
-        self.prev_pid_params = (self.p_param, self.i_param, self.d_param)
-
-        # # High rewards penalty
-        # total_pid = self.p_param + self.i_param + self.d_param
-        # efficiency_penalty = (total_pid**diversity_ratio)
-        
-        # Combine rewards and penalties
         total_reward = (base_reward )
         
         # print("RL total reward", total_reward)
@@ -522,15 +492,7 @@ class RLPIDController(RewardController):
         self.p_param, self.i_param, self.d_param = new_p, new_i, new_d
         self.reward_scale = new_reward_scale
         
-        # Log significant changes
-        significant_change = (
-            abs(p_change) > 0.05 * (old_p + 1.0) or 
-            abs(i_change) > 0.05 * (old_i + 1.0) or
-            abs(d_change) > 0.05 * (old_d + 1.0) or
-            abs(reward_scale_change) > 0.05 * (old_reward_scale + 1.0)
-        )
-        
-        if significant_change or self.steps_done % 100 == 0:
+        if self.steps_done % 1000 == 0:
             print(f"Parameters updated: P: {old_p:.1f} -> {new_p:.1f}, "
                 f"I: {old_i:.1f} -> {new_i:.1f}, D: {old_d:.1f} -> {new_d:.1f}, "
                 f"Reward Scale: {old_reward_scale:.1f} -> {new_reward_scale:.1f}")
@@ -563,7 +525,7 @@ class RLPIDController(RewardController):
         self.i_term_max = max(1.0, self.max_observed_reward * 2.0)
         
         # Log the bounds periodically
-        if self.steps_done % 100 == 0:
+        if self.steps_done % 1000 == 0:
             print(f"Adaptive bounds: max_p={self.max_p:.1f}, max_i={self.max_i:.1f}, "
                 f"max_d={self.max_d:.1f}, max_observed_reward={self.max_observed_reward:.1f}")
     
@@ -622,28 +584,14 @@ class RLPIDController(RewardController):
                 # Calculate new reward based on PID control
                 new_reward = p_term + i_term + d_term
                 
-                # Special handling during state transition
-                if in_transition and hasattr(self, 'prev_rewards'):
-                    # If this is an existing state with previous rewards
-                    if state in self.prev_rewards:
-                        # Blend old and new rewards based on transition progress
-                        # Start with mostly old rewards, gradually shift to new calculation
-                        blend_factor = self.transition_progress
-                        prev_reward = self.prev_rewards[state]
-                        
-                        # Smooth transition from old to new reward
-                        blended_reward = (1 - blend_factor) * prev_reward + blend_factor * new_reward
-                        state_rewards[self.attribute_idx][state] = blended_reward
-                        
-                        # Debug logging for major changes
-                        if abs(prev_reward - new_reward) > 100 and self.steps_done % 5 == 0:
-                            print(f"State {state}: Blending {prev_reward:.1f}->{new_reward:.1f}, using {blended_reward:.1f}")
-                    else:
-                        # For the new state, use calculated reward
-                        state_rewards[self.attribute_idx][state] = new_reward
-                else:
-                    # Standard update outside of transition
-                    state_rewards[self.attribute_idx][state] = new_reward
+                # if self.steps_done % 500 == 0:  # Log every 5 steps during transition
+                #     print(f"DEBUG {state}: ideal_share={ideal_share:.3f}, state_share={state_share:.3f}, error={error:.3f}")
+                #     print(f"  PID params: P={self.p_param:.1f}, I={self.i_param:.1f}, D={self.d_param:.1f}")
+                #     print(f"  Accumulated_error={self.accumulated_error[state]:.3f}, last_err={last_err:.3f}")
+                #     print(f"  Terms: P={p_term:.1f}, I={i_term:.1f}, D={d_term:.1f}, Total={new_reward:.1f}")
+                #     print(f"  Reward scale: {self.reward_scale:.1f}")
+                
+                state_rewards[self.attribute_idx][state] = new_reward
                 
                 # Track total rewards allocated (absolute value)
                 total_rewards += abs(state_rewards[self.attribute_idx][state])
@@ -677,6 +625,18 @@ class RLPIDController(RewardController):
             old_state_dim = self.state_dim
             old_states = self.states.copy()
             
+            if hasattr(self, 'good_reward_scale'):
+                preserved_reward_scale = self.good_reward_scale
+                print(f"Using good reward scale from stable period: {preserved_reward_scale:.1f}")
+            else:
+                preserved_reward_scale = self.reward_scale
+                print(f"No good scale stored, using current: {preserved_reward_scale:.1f}")
+
+            old_epsilon = self.epsilon
+            self.epsilon = self.initial_epsilon
+            print(f"New state detected - resetting exploration rate: {old_epsilon:.3f} -> {self.epsilon:.3f}")
+
+
             # Update state set and dimensions
             self.states = list(current_states)  # Convert to list to ensure consistent ordering
             self.state_dim = len(self.states) + 4  # +3 for PID params, +1 for reward_scale
@@ -689,8 +649,25 @@ class RLPIDController(RewardController):
             for state in current_states:
                 if state not in self.accumulated_error:
                     self.accumulated_error[state] = 0
+                if state not in self.last_error:
                     self.last_error[state] = 0
             
+            # Scale accumulated errors for the new ideal distribution
+            old_ideal_share = 1 / (len(old_states) - 1) if len(old_states) > 1 else 0  # -1 for NO_STATE
+            new_ideal_share = 1 / (len(current_states) - 1) if len(current_states) > 1 else 0  # -1 for NO_STATE
+
+            if old_ideal_share > 0 and new_ideal_share > 0:
+                error_scale_factor = old_ideal_share / new_ideal_share
+                print(f"Scaling accumulated errors by factor: {error_scale_factor:.3f} (old ideal: {old_ideal_share:.3f} -> new ideal: {new_ideal_share:.3f})")
+                
+                # Scale existing accumulated errors for existing states
+                for state in current_states:
+                    if state in self.accumulated_error and state != 'NO_STATE':
+                        old_error = self.accumulated_error[state]
+                        self.accumulated_error[state] *= error_scale_factor
+                        if abs(old_error) > 0.001:  # Only log significant errors
+                            print(f"Scaled accumulated error for {state}: {old_error:.3f} -> {self.accumulated_error[state]:.3f}")
+
             states_changed = True
             
             # If state dimensions changed, preserve network weights where possible
@@ -793,20 +770,43 @@ class RLPIDController(RewardController):
                     print(f"Adapted {len(adapted_buffer)} experiences to new dimensions")
                 
                 # Update previous state with appropriate dimensions if it exists
-                if self.prev_state is not None:
+                if self.prev_state is not None and len(self.prev_state) > 0:
                     try:
-                        old_state_part = self.prev_state[:old_state_count]
-                        old_pid_part = self.prev_state[old_state_count:old_state_count+4] if len(self.prev_state) >= old_state_count + 4 else [0, 0, 0, 0]
+                        # Simple and robust adaptation approach
+                        if len(self.prev_state) < self.state_dim:
+                            # Pad with zeros if state dimension increased
+                            self.prev_state = list(self.prev_state) + [0.0] * (self.state_dim - len(self.prev_state))
+                        elif len(self.prev_state) > self.state_dim:
+                            # Truncate if state dimension decreased  
+                            self.prev_state = self.prev_state[:self.state_dim]
                         
-                        if new_state_count > old_state_count:
-                            new_state_part = old_state_part + [0.0] * (new_state_count - old_state_count)
-                        else:
-                            new_state_part = old_state_part[:new_state_count]
+                        # Ensure it's a list for consistency
+                        self.prev_state = list(self.prev_state)
+                        print(f"Adapted prev_state to new dimensions: {len(self.prev_state)}")
                         
-                        self.prev_state = new_state_part + old_pid_part
-                    except (IndexError, ValueError) as e:
-                        print(f"Error adapting prev_state: {e}, resetting to None")
-                        self.prev_state = None
+                    except Exception as e:
+                        print(f"Error adapting prev_state: {e}, but continuing with adapted version")
+                        # Don't reset to None - try to create a reasonable default state
+                        if self.state_dim > 0:
+                            # Create default state with current agent distribution + current PID params
+                            try:
+                                current_state = self.get_state_representation(agents, current_states)
+                                self.prev_state = current_state
+                                print(f"Created new prev_state from current state: {len(self.prev_state)}")
+                            except:
+                                # Last resort - create zero state
+                                self.prev_state = [0.0] * self.state_dim
+                                print(f"Created zero prev_state: {len(self.prev_state)}")
+                else:
+                    print("prev_state was None, will be set from current state in next iteration")
+            self.reward_scale = preserved_reward_scale
+            print(f"Restored reward scale after network adaptation: {self.reward_scale:.1f}")
+            
+            self.in_transition = True
+            self.transition_epochs = 500  # Number of epochs to protect reward scale
+            self.transition_progress = 0
+            self.stable_reward_scale = preserved_reward_scale  # Store for protection
+            print(f"Entering transition protection period: {self.transition_epochs} epochs")
 
         try:
             # Update agent counts for this epoch
@@ -829,7 +829,9 @@ class RLPIDController(RewardController):
                 # Log transition progress periodically
                 if self.steps_done % 10 == 0:
                     print(f"In transition period: {self.transition_progress*100:.1f}% complete")
-                
+                if hasattr(self, 'stable_reward_scale'):
+                    self.reward_scale = self.stable_reward_scale
+
                 # Apply PID control without changing parameters
                 state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
                 self.prev_total_rewards = total_rewards
@@ -841,6 +843,8 @@ class RLPIDController(RewardController):
                     self.in_transition = False
                     self.transition_progress = 1.0
                     print("Transition period complete, resuming RL parameter updates")
+                    if hasattr(self, 'stable_reward_scale'):
+                        delattr(self, 'stable_reward_scale')
                 
                 # Update previous state for next iteration (but not action since we didn't select one)
                 if len(current_state) == self.state_dim:
@@ -855,6 +859,13 @@ class RLPIDController(RewardController):
             # CHECK FOR STABILITY CONDITION - If diversity ratio is above threshold,
             # skip RL updates and just apply the existing PID parameters
             if diversity_ratio > 0.995:
+
+                # Store good reward scale when system is stable with good diversity
+                if not hasattr(self, 'good_reward_scale') or self.reward_scale > getattr(self, 'good_reward_scale', 0):
+                    self.good_reward_scale = self.reward_scale
+                    if self.steps_done % 100 == 0:
+                        print(f"Storing good reward scale: {self.reward_scale:.1f} (diversity: {diversity_ratio:.3f})")
+                
                 # Only apply PID control with current parameters
                 if self.steps_done % 100 == 0:
                     print(f"Diversity ratio {diversity_ratio:.3f} > 0.99 - Keeping parameters stable")
@@ -884,7 +895,12 @@ class RLPIDController(RewardController):
             else:
                 # Select action based on current state
                 actions = self.select_action(current_state)
-                
+
+                if hasattr(self, 'in_transition') and self.in_transition:
+                # Zero out the reward scale adjustment (last action)
+                    if len(actions) >= 4:
+                        actions[3] = 0  # Don't change reward scale during transition
+                    
                 # Apply the selected actions to adjust parameters
                 self.apply_actions_to_pid_parameters(actions)
                 
@@ -893,7 +909,7 @@ class RLPIDController(RewardController):
                     # Apply PID control first to get total rewards
                     state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
                     
-                    # Calculate reward based on both diversity and efficiency
+                    # Calculate reward based on diversity
                     reward = self.calculate_reward(current_diversity, ideal_diversity, total_rewards)
                     # pass ideal diversity to RLPIDController
                     self.ideal_diversity = ideal_diversity
@@ -925,15 +941,13 @@ class RLPIDController(RewardController):
                         self.best_diversity_ratio = diversity_ratio
                         self.best_pid_params = (self.p_param, self.i_param, self.d_param)
                         self.best_reward_scale = self.reward_scale
-                        print(f"New best parameters! P={self.p_param:.1f}, I={self.i_param:.1f}, D={self.d_param:.1f}, "
-                            f"Scale={self.reward_scale:.1f} (diversity ratio: {diversity_ratio:.3f})")
                 else:
                     # No diversity metrics available, just apply PID control
                     state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
                     self.prev_total_rewards = total_rewards
             
             # Print PID parameters and performance metrics periodically
-            if self.steps_done % 20 == 0:
+            if self.steps_done % 1000 == 0:
                 p_total = self.p_param + self.i_param + self.d_param
                 if p_total > 0:
                     p_dist = f"P: {100*self.p_param/p_total:.1f}%, I: {100*self.i_param/p_total:.1f}%, D: {100*self.d_param/p_total:.1f}%"
@@ -979,7 +993,7 @@ class RLPIDController(RewardController):
                     # Apply PID control first to get total rewards
                     state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
                     
-                    # Calculate reward based on both diversity and efficiency
+                    # Calculate reward based on diversity
                     reward = self.calculate_reward(current_diversity, ideal_diversity, total_rewards)
                     # pass ideal diversity to RLPIDController
                     self.ideal_diversity = ideal_diversity

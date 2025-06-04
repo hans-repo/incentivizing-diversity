@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from agent import *
 
-def ziegler_nichols_tuning(agents, possible_states, base_rewards, epochs=1000, n_agents=100):
+def ziegler_nichols_tuning(agents, possible_states, epochs=1000, n_agents=100):
     """
     Implement Ziegler-Nichols PID tuning method by finding critical gain and period.
     Returns tuned P, I, D parameters based on critical gain (Ku) and critical period (Tu).
@@ -25,7 +25,7 @@ def ziegler_nichols_tuning(agents, possible_states, base_rewards, epochs=1000, n
         print(f"Testing Kp = {Kp}")
         
         # Reset for this test
-        state_rewards = [{state: base_rewards for state in possible_states} for _ in range(num_attributes)]
+        state_rewards = [{state: 0 for state in possible_states} for _ in range(num_attributes)]
         accumulated_error = [{state: 0 for state in possible_states} for _ in range(num_attributes)]
         last_error = [{state: 0 for state in possible_states} for _ in range(num_attributes)]
 
@@ -87,14 +87,14 @@ def ziegler_nichols_tuning(agents, possible_states, base_rewards, epochs=1000, n
                         Ku = Kp
                         Tu = period
                         
-                        # Plot the oscillation
-                        plt.figure(figsize=(12, 6))
-                        plt.plot(counts)
-                        plt.title(f"Oscillation at Critical Gain Ku={Ku:.2f}, Period Tu={Tu:.2f}")
-                        plt.xlabel("Epoch")
-                        plt.ylabel(f"Agents in {oscillation_state}")
-                        plt.grid(True)
-                        plt.show()
+                        # # Plot the oscillation
+                        # plt.figure(figsize=(12, 6))
+                        # plt.plot(counts)
+                        # plt.title(f"Oscillation at Critical Gain Ku={Ku:.2f}, Period Tu={Tu:.2f}")
+                        # plt.xlabel("Epoch")
+                        # plt.ylabel(f"Agents in {oscillation_state}")
+                        # plt.grid(True)
+                        # plt.show()
                         
                         break  # We found the critical values
     
