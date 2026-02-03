@@ -41,15 +41,15 @@ def plot_multiple_experiment_results(experiment_indices, metrics, metric_name, y
     
     return plt
 
-def plot_stacked_area(agents_history, epochs, possible_states):
+def plot_stacked_area(agents_history, epochs, possible_versions):
     """
-    Plot a stacked area chart showing the distribution of agents across states over time.
-    Modified to handle dynamic state sets properly and avoid empty plots.
+    Plot a stacked area chart showing the distribution of agents across versions over time.
+    Modified to handle dynamic version sets properly and avoid empty plots.
     
     Args:
-        agents_history: List of agent states for each epoch
+        agents_history: List of agent versions for each epoch
         epochs: Number of epochs to plot
-        possible_states: List of all possible states (including those added during the simulation)
+        possible_versions: List of all possible versions (including those added during the simulation)
     """
     
     # Use only the available epochs
@@ -61,51 +61,51 @@ def plot_stacked_area(agents_history, epochs, possible_states):
         plt.title("No Agent Data Available")
         return plt
     
-    # Initialize state counts dictionary with all possible states
-    state_counts = {state: np.zeros(available_epochs) for state in possible_states}
+    # Initialize version counts dictionary with all possible versions
+    version_counts = {version: np.zeros(available_epochs) for version in possible_versions}
     
-    # Count agents in each state for each epoch
+    # Count agents in each version for each epoch
     for epoch in range(available_epochs):
         # Skip if there's no data for this epoch
         if epoch >= len(agents_history) or not agents_history[epoch]:
             continue
             
-        # Count agents in each state for this epoch
-        for agent_state in agents_history[epoch]:
-            if agent_state in state_counts:
-                state_counts[agent_state][epoch] += 1
+        # Count agents in each version for this epoch
+        for agent_version in agents_history[epoch]:
+            if agent_version in version_counts:
+                version_counts[agent_version][epoch] += 1
     
     
-    # Filter out NO_STATE and find states that actually have agents
-    states_to_plot = []
-    for state in possible_states:
-        if state != 'NO_STATE' and np.any(state_counts[state] > 0):
-            states_to_plot.append(state)
+    # Filter out NO_version and find versions that actually have agents
+    versions_to_plot = []
+    for version in possible_versions:
+        if version != 'NO_version' and np.any(version_counts[version] > 0):
+            versions_to_plot.append(version)
     
-    # If no states have any agents, show an empty plot with a message
-    if not states_to_plot:
-        plt.title("No Agents Found in Any State")
+    # If no versions have any agents, show an empty plot with a message
+    if not versions_to_plot:
+        plt.title("No Agents Found in Any version")
         plt.xlabel('Epoch')
         plt.ylabel('Number of Agents')
         return plt
     
-    # Create a consistent color map for states
-    cmap = plt.cm.get_cmap('tab10', len(states_to_plot) + 1)  # +1 to avoid repeating first color
-    colors = [cmap(i) for i in range(len(states_to_plot))]
+    # Create a consistent color map for versions
+    cmap = plt.cm.get_cmap('tab10', len(versions_to_plot) + 1)  # +1 to avoid repeating first color
+    colors = [cmap(i) for i in range(len(versions_to_plot))]
     
     # Create the stacked area plot
     plt.stackplot(range(available_epochs),
-                 [state_counts[state] for state in states_to_plot],
-                 labels=states_to_plot,
+                 [version_counts[version] for version in versions_to_plot],
+                 labels=versions_to_plot,
                  colors=colors,
                  alpha=0.7)
     
     plt.xlabel('Epoch')
     plt.ylabel('Number of Agents')
-    plt.title('Evolution of Agent States Over Epochs')
+    plt.title('Evolution of Agent versions Over Epochs')
     
-    # Only add legend if we have states to plot
-    if states_to_plot:
+    # Only add legend if we have versions to plot
+    if versions_to_plot:
         plt.legend(loc='upper right')
         
     plt.grid(True, linestyle='--', alpha=0.5)
@@ -117,15 +117,15 @@ def plot_stacked_area(agents_history, epochs, possible_states):
     return plt
 
 
-def calculate_diversity(agents_real_history, epochs, possible_states, n_agents):
+def calculate_diversity(agents_real_history, epochs, possible_versions, n_agents):
     """
     Calculate diversity metrics for each epoch based on Shannon entropy.
-    Modified to handle dynamic state sets by using the state set specific to each epoch.
+    Modified to handle dynamic version sets by using the version set specific to each epoch.
     
     Args:
-        agents_real_history: List of agent states for each attribute and epoch
+        agents_real_history: List of agent versions for each attribute and epoch
         epochs: List of epochs to calculate diversity for
-        possible_states: List/set of possible states for each epoch (can be dynamic)
+        possible_versions: List/set of possible versions for each epoch (can be dynamic)
         n_agents: Total number of agents
         
     Returns:
@@ -140,23 +140,23 @@ def calculate_diversity(agents_real_history, epochs, possible_states, n_agents):
             if epoch >= len(agents_real_history[k]):
                 continue
                 
-            # Get the correct set of states for this epoch (excluding NO_STATE)
-            valid_states = [s for s in possible_states if s != 'NO_STATE']
+            # Get the correct set of versions for this epoch (excluding NO_version)
+            valid_versions = [s for s in possible_versions if s != 'NO_version']
             
             # Calculate Shannon entropy for this epoch
             diversity_this_epoch = 0
-            state_counts = {state: 0 for state in valid_states}
+            version_counts = {version: 0 for version in valid_versions}
             
-            # Count agents in each state
-            for agent_state in agents_real_history[k][epoch]:
-                if agent_state in state_counts:
-                    state_counts[agent_state] += 1
+            # Count agents in each version
+            for agent_version in agents_real_history[k][epoch]:
+                if agent_version in version_counts:
+                    version_counts[agent_version] += 1
             
-            # Calculate entropy components for each state
-            for state in valid_states:
-                count = state_counts[state]
+            # Calculate entropy components for each version
+            for version in valid_versions:
+                count = version_counts[version]
                 if count > 0:
-                    # Shannon entropy calculation: -p*log2(p) for each state
+                    # Shannon entropy calculation: -p*log2(p) for each version
                     p = count / n_agents
                     diversity_this_epoch -= p * math.log2(p)
             
@@ -165,22 +165,22 @@ def calculate_diversity(agents_real_history, epochs, possible_states, n_agents):
     return diversity_all_epoch
 
 
-def get_largest_state(agents_history, epochs, possible_states, n_agents):
+def get_largest_version(agents_history, epochs, possible_versions, n_agents):
     """
-    Calculate the proportion of agents in the largest state for each epoch.
-    Modified to handle dynamic state sets.
+    Calculate the proportion of agents in the largest version for each epoch.
+    Modified to handle dynamic version sets.
     
     Args:
-        agents_history: List of agent states for each attribute and epoch
+        agents_history: List of agent versions for each attribute and epoch
         epochs: List of epochs to calculate for
-        possible_states: List/set of possible states (can be dynamic)
+        possible_versions: List/set of possible versions (can be dynamic)
         n_agents: Total number of agents
         
     Returns:
-        Dictionary of largest state proportions for each attribute, epoch
+        Dictionary of largest version proportions for each attribute, epoch
     """
     NUM_ATTRIBUTES = len(agents_history)
-    largest_state_all_epochs = [{epoch: [] for epoch in epochs} for _ in range(NUM_ATTRIBUTES)]
+    largest_version_all_epochs = [{epoch: [] for epoch in epochs} for _ in range(NUM_ATTRIBUTES)]
     
     for k in range(NUM_ATTRIBUTES):
         for epoch in epochs:
@@ -188,50 +188,50 @@ def get_largest_state(agents_history, epochs, possible_states, n_agents):
             if epoch >= len(agents_history[k]):
                 continue
                 
-            # Get valid states for this epoch (excluding NO_STATE)
-            valid_states = [s for s in possible_states if s != 'NO_STATE']
+            # Get valid versions for this epoch (excluding NO_version)
+            valid_versions = [s for s in possible_versions if s != 'NO_version']
             
-            # Find the largest state for this epoch
-            largest_state_this_epoch = 0
-            state_counts = {state: 0 for state in valid_states}
+            # Find the largest version for this epoch
+            largest_version_this_epoch = 0
+            version_counts = {version: 0 for version in valid_versions}
             
-            # Count agents in each state
-            for agent_state in agents_history[k][epoch]:
-                if agent_state in state_counts:
-                    state_counts[agent_state] += 1
+            # Count agents in each version
+            for agent_version in agents_history[k][epoch]:
+                if agent_version in version_counts:
+                    version_counts[agent_version] += 1
             
             # Find the largest count
-            largest_state_this_epoch = max(state_counts.values()) if state_counts else 0
+            largest_version_this_epoch = max(version_counts.values()) if version_counts else 0
             
             # Record as a proportion of total agents
-            largest_state_all_epochs[k][epoch].append(largest_state_this_epoch / n_agents)
+            largest_version_all_epochs[k][epoch].append(largest_version_this_epoch / n_agents)
             
-    return largest_state_all_epochs
+    return largest_version_all_epochs
 
 
-def get_ideal_diversity(possible_states):
+def get_ideal_diversity(possible_versions):
     """
-    Calculate the ideal (maximum) diversity for a given set of states.
-    Modified to handle dynamic state sets.
+    Calculate the ideal (maximum) diversity for a given set of versions.
+    Modified to handle dynamic version sets.
     
     Args:
-        possible_states: List/set of possible states (including NO_STATE)
+        possible_versions: List/set of possible versions (including NO_version)
         
     Returns:
         Ideal diversity value (Shannon entropy)
     """
-    # Count valid states (excluding NO_STATE)
-    valid_states = [s for s in possible_states if s != 'NO_STATE']
-    num_valid_states = len(valid_states)
+    # Count valid versions (excluding NO_version)
+    valid_versions = [s for s in possible_versions if s != 'NO_version']
+    num_valid_versions = len(valid_versions)
     
-    if num_valid_states <= 1:
-        return 0.0  # No diversity possible with 0 or 1 valid states
+    if num_valid_versions <= 1:
+        return 0.0  # No diversity possible with 0 or 1 valid versions
     
-    # Ideal distribution is equal probability across all valid states
-    p = 1 / num_valid_states
+    # Ideal distribution is equal probability across all valid versions
+    p = 1 / num_valid_versions
     
-    # Shannon entropy calculation: -p*log2(p) for each state
-    entropy = -num_valid_states * (p * math.log2(p))
+    # Shannon entropy calculation: -p*log2(p) for each version
+    entropy = -num_valid_versions * (p * math.log2(p))
     
     return entropy
 
@@ -262,17 +262,17 @@ def get_avg_loss(NUM_ATTRIBUTES, average_last_25_percent, ideal_diversity_all_ex
 
 
 def plot_diversity_over_time(diversity_data, epochs, ideal_diversity_before, ideal_diversity_after, 
-                            new_state_epoch, new_state_name, pid_params=None):
+                            new_version_epoch, new_version_name, pid_params=None):
     """
-    Plot diversity metrics over time with annotations for state changes.
+    Plot diversity metrics over time with annotations for version changes.
     
     Args:
         diversity_data: Dictionary of diversity values for each epoch
         epochs: Total number of epochs
-        ideal_diversity_before: Ideal diversity before new state was added
-        ideal_diversity_after: Ideal diversity after new state was added
-        new_state_epoch: Epoch when new state was added
-        new_state_name: Name of the new state
+        ideal_diversity_before: Ideal diversity before new version was added
+        ideal_diversity_after: Ideal diversity after new version was added
+        new_version_epoch: Epoch when new version was added
+        new_version_name: Name of the new version
         pid_params: Optional tuple of (P, I, D) values for title
     """
     plt.figure(figsize=(12, 7))
@@ -286,9 +286,9 @@ def plot_diversity_over_time(diversity_data, epochs, ideal_diversity_before, ide
         plt.plot(epochs_list[:len(diversity_values)], diversity_values, 
                  label=f"Diversity - Attribute {k}")
     
-    # Add vertical line for new state addition
-    plt.axvline(x=new_state_epoch, color='r', linestyle='--', 
-                label=f"New state ({new_state_name}) added")
+    # Add vertical line for new version addition
+    plt.axvline(x=new_version_epoch, color='r', linestyle='--', 
+                label=f"New version ({new_version_name}) added")
     
     # Add horizontal lines for ideal diversity
     plt.axhline(y=ideal_diversity_before, color='g', linestyle=':', 
@@ -301,7 +301,7 @@ def plot_diversity_over_time(diversity_data, epochs, ideal_diversity_before, ide
         p, i, d = pid_params
         plt.title(f'Diversity Evolution with PID (P={p:.1f}, I={i:.1f}, D={d:.1f})')
     else:
-        plt.title('Diversity Evolution with Dynamic State Addition')
+        plt.title('Diversity Evolution with Dynamic version Addition')
         
     plt.xlabel('Epochs')
     plt.ylabel('Diversity (Shannon Entropy)')
@@ -313,7 +313,7 @@ def plot_diversity_over_time(diversity_data, epochs, ideal_diversity_before, ide
 
 def analyze_convergence(diversity_data, epochs, ideal_diversity, window_size=50):
     """
-    Analyze how quickly the system converges to steady-state diversity.
+    Analyze how quickly the system converges to steady-version diversity.
     
     Args:
         diversity_data: Dictionary of diversity values for each epoch
@@ -367,12 +367,13 @@ def measure_dual_phase_convergence(diversity_values, transition_epoch,
                                   ideal_before, ideal_after, target_percentage=0.9):
     """
     Measures convergence in a two-phase system with changing ideal diversity.
+    Updated to handle None transition_epoch (when no new version is added).
     
     Args:
         diversity_values: List of diversity values for each epoch
-        transition_epoch: Epoch where new state is added
-        ideal_before: Ideal diversity before state addition
-        ideal_after: Ideal diversity after state addition
+        transition_epoch: Epoch where new version is added (None if no new version)
+        ideal_before: Ideal diversity before version addition
+        ideal_after: Ideal diversity after version addition
         target_percentage: Target percentage of ideal diversity
         
     Returns:
@@ -396,18 +397,38 @@ def measure_dual_phase_convergence(diversity_values, transition_epoch,
         }
     }
     
-    # Phase 1 convergence (before new state)
+    # If no transition occurred, treat as single-phase convergence
+    if transition_epoch is None:
+        # Single phase analysis - entire run is "phase 1"
+        if diversity_values:
+            max_diversity = max(diversity_values)
+            results['phase1']['percentage_reached'] = max_diversity / ideal_before if ideal_before > 0 else 0
+            
+            for epoch, diversity in enumerate(diversity_values):
+                if diversity >= results['phase1']['target']:
+                    results['phase1']['epochs_to_converge'] = epoch
+                    break
+        
+        # No phase 2 or adaptation metrics for single-phase
+        results['phase2']['target'] = ideal_before * target_percentage  # Same as phase 1
+        results['overall']['adaptation_shock'] = 0  # No shock without transition
+        results['overall']['recovery_time'] = 0  # No recovery needed
+        
+        return results
+    
+    # Dual-phase analysis (original logic)
+    # Phase 1 convergence (before new version)
     phase1_values = diversity_values[:transition_epoch]
     if phase1_values:
         max_p1_diversity = max(phase1_values)
-        results['phase1']['percentage_reached'] = max_p1_diversity / ideal_before
+        results['phase1']['percentage_reached'] = max_p1_diversity / ideal_before if ideal_before > 0 else 0
         
         for epoch, diversity in enumerate(phase1_values):
             if diversity >= results['phase1']['target']:
                 results['phase1']['epochs_to_converge'] = epoch
                 break
     
-    # Phase 2 convergence (after new state)
+    # Phase 2 convergence (after new version)
     if transition_epoch < len(diversity_values):
         phase2_values = diversity_values[transition_epoch:]
         
@@ -434,7 +455,7 @@ def measure_dual_phase_convergence(diversity_values, transition_epoch,
         # Calculate max percentage reached in phase 2
         if phase2_values:
             max_p2_diversity = max(phase2_values)
-            results['phase2']['percentage_reached'] = max_p2_diversity / ideal_after
+            results['phase2']['percentage_reached'] = max_p2_diversity / ideal_after if ideal_after > 0 else 0
         
         # Calculate recovery time (how long to get back to pre-shock diversity level)
         if results['overall']['adaptation_shock'] is not None and transition_epoch > 0:
@@ -448,10 +469,22 @@ def measure_dual_phase_convergence(diversity_values, transition_epoch,
 
 def analyze_system_adaptability(diversity_values, transition_epoch, ideal_before, ideal_after):
     """
-    Analyzes how well the system adapts to the introduction of a new state.
+    Analyzes how well the system adapts to the introduction of a new version.
+    Updated to handle None transition_epoch (when no new version is added).
     
     Returns metrics about adaptation quality and speed.
     """
+    # If no transition occurred, return metrics indicating no adaptation was needed
+    if transition_epoch is None:
+        return {
+            "pre_change_diversity_avg": None,
+            "initial_drop_pct": 0,  # No drop if no transition
+            "recovery_time_epochs": 0,  # No recovery needed
+            "time_to_90pct_new_ideal": None,  # No new ideal
+            "phase2_settling_time": None,  # No phase 2
+            "final_adaptation_quality": 1.0  # Perfect since no adaptation needed
+        }
+    
     # Skip if we don't have enough data
     if transition_epoch >= len(diversity_values) or transition_epoch < 10:
         return {"error": "Insufficient data for analysis"}
@@ -605,41 +638,42 @@ def calculate_convergence_metrics(diversity_values, ideal_diversity, tolerance=0
             midpoint_value = diversity_values[midpoint]
             convergence_rate = (midpoint_value - initial_value) / midpoint
     
-    # Calculate steady-state error after convergence
-    steady_state_error = None
-    steady_state_stability = None
+    # Calculate steady-version error after convergence
+    steady_version_error = None
+    steady_version_stability = None
     
     if converged and convergence_epoch < len(diversity_values) - window_size:
         post_convergence = diversity_values[convergence_epoch:]
         mean_post = sum(post_convergence) / len(post_convergence)
-        steady_state_error = (ideal_diversity - mean_post) / ideal_diversity
+        steady_version_error = (ideal_diversity - mean_post) / ideal_diversity if ideal_diversity > 0 else 0
         
-        # Calculate stability (coefficient of variation in steady state)
+        # Calculate stability (coefficient of variation in steady version)
         variance = sum((x - mean_post) ** 2 for x in post_convergence) / len(post_convergence)
         std_dev = variance ** 0.5
-        steady_state_stability = std_dev / mean_post if mean_post > 0 else float('inf')
+        steady_version_stability = std_dev / mean_post if mean_post > 0 else float('inf')
     
     # Return comprehensive metrics
     return {
         "time_to_convergence": convergence_epoch,
         "convergence_rate": convergence_rate,
-        "steady_state_error": steady_state_error, 
-        "steady_state_stability": steady_state_stability,
-        "final_diversity_quality": diversity_values[-1] / ideal_diversity if ideal_diversity > 0 else 0,
+        "steady_version_error": steady_version_error, 
+        "steady_version_stability": steady_version_stability,
+        "final_diversity_quality": diversity_values[-1] / ideal_diversity if ideal_diversity > 0 and diversity_values else 0,
         "converged": converged
     }
 
 def calculate_resilience_metrics(diversity_values, transition_epoch, ideal_before, ideal_after, 
                               recovery_threshold=0.9):
     """
-    Calculate comprehensive resilience metrics for a system responding to a new state.
+    Calculate comprehensive resilience metrics for a system responding to a new version.
+    Updated to handle None transition_epoch (when no new version is added).
     
     Parameters:
     -----------
     diversity_values : list
         Time series of diversity values
-    transition_epoch : int
-        Epoch at which the new state was introduced
+    transition_epoch : int or None
+        Epoch at which the new version was introduced (None if no new version)
     ideal_before : float
         Ideal diversity before transition
     ideal_after : float
@@ -652,10 +686,22 @@ def calculate_resilience_metrics(diversity_values, transition_epoch, ideal_befor
     dict
         Dictionary with resilience metrics
     """
+    # If no transition occurred, return metrics indicating no resilience test
+    if transition_epoch is None:
+        return {
+            "pre_transition_quality": None,
+            "initial_impact_magnitude": None,
+            "initial_impact_percentage": None,
+            "recovery_time_epochs": None,
+            "reconvergence_time_epochs": None,
+            "stability_time_epochs": None,
+            "final_adaptation_quality": None
+        }
+    
     # Ensure we have enough data
     if transition_epoch >= len(diversity_values) or transition_epoch < 5:
         return {
-            "error": "Insufficient data for analysis"
+            "error": f"Insufficient data for analysis: transition_epoch={transition_epoch}, data_length={len(diversity_values)}"
         }
     
     # Extract pre-transition and post-transition diversity values
@@ -677,8 +723,8 @@ def calculate_resilience_metrics(diversity_values, transition_epoch, ideal_befor
         impact_percentage = None
     
     # Calculate recovery time (time to reach recovery_threshold of pre-quality adjusted for new ideal)
-    recovery_target = pre_quality * recovery_threshold * ideal_after / ideal_before
-    absolute_recovery_target = recovery_target * ideal_after
+    recovery_target = pre_quality * recovery_threshold * ideal_after / ideal_before if ideal_before > 0 else 0
+    absolute_recovery_target = recovery_target * ideal_after if ideal_after > 0 else 0
     
     recovery_time = None
     for i, val in enumerate(post_values):
@@ -816,6 +862,7 @@ def calculate_resource_efficiency(diversity_values, rewards_history, ideal_diver
 def analyze_pid_parameter_evolution(pid_params_history, diversity_values, transition_epoch=None):
     """
     Analyze how PID parameters evolve and affect system performance (for RL-tuned PID).
+    Updated to handle None transition_epoch (when no new version is added).
     
     Parameters:
     -----------
@@ -823,8 +870,8 @@ def analyze_pid_parameter_evolution(pid_params_history, diversity_values, transi
         Time series of tuples (P, I, D) representing PID parameters at each epoch
     diversity_values : list
         Time series of diversity values
-    transition_epoch : int, optional
-        Epoch at which a new state was introduced
+    transition_epoch : int or None, optional
+        Epoch at which a new version was introduced (None if no new version)
         
     Returns:
     --------
@@ -882,7 +929,8 @@ def analyze_pid_parameter_evolution(pid_params_history, diversity_values, transi
             "d_percentage": 0
         }
     
-    # If transition epoch is provided, analyze adaptation speed
+    # If transition epoch is provided and valid, analyze adaptation speed
+    adaptation_speed = None
     if transition_epoch is not None and transition_epoch < len(pid_params_history) - 10:
         # Compare parameter change speed after transition
         pre_transition = pid_params_history[max(0, transition_epoch-10):transition_epoch]
@@ -911,11 +959,10 @@ def analyze_pid_parameter_evolution(pid_params_history, diversity_values, transi
             "i_adaptation_ratio": post_change_rate[1] / pre_change_rate[1] if pre_change_rate[1] > 0 else float('inf'),
             "d_adaptation_ratio": post_change_rate[2] / pre_change_rate[2] if pre_change_rate[2] > 0 else float('inf')
         }
-    else:
-        adaptation_speed = None
     
     # Parameter-performance correlation
     # Calculate correlation between parameter changes and diversity improvements
+    parameter_effectiveness = None
     if len(diversity_values) >= len(pid_params_history):
         diversity_values = diversity_values[:len(pid_params_history)]
         
@@ -946,8 +993,6 @@ def analyze_pid_parameter_evolution(pid_params_history, diversity_values, transi
             "i_effectiveness": calculate_correlation(i_changes, diversity_changes),
             "d_effectiveness": calculate_correlation(d_changes, diversity_changes)
         }
-    else:
-        parameter_effectiveness = None
     
     return {
         "parameter_stability": {
@@ -964,6 +1009,7 @@ def compile_system_performance_metrics(diversity_values, rewards_history, pid_pa
                                      transition_epoch, ideal_before, ideal_after):
     """
     Compile all performance metrics into a single comprehensive report.
+    Updated to handle None transition_epoch (when no new version is added).
     
     Parameters:
     -----------
@@ -973,8 +1019,8 @@ def compile_system_performance_metrics(diversity_values, rewards_history, pid_pa
         Time series of total rewards allocated
     pid_params_history : list or None
         Time series of tuples (P, I, D) representing PID parameters (for RL mode)
-    transition_epoch : int
-        Epoch at which the new state was introduced
+    transition_epoch : int or None
+        Epoch at which the new version was introduced (None if no new version)
     ideal_before : float
         Ideal diversity before transition
     ideal_after : float
@@ -985,29 +1031,64 @@ def compile_system_performance_metrics(diversity_values, rewards_history, pid_pa
     dict
         Dictionary with all performance metrics
     """
-    # Calculate Phase 1 convergence (before transition)
-    phase1_values = diversity_values[:transition_epoch]
-    phase1_convergence = calculate_convergence_metrics(phase1_values, ideal_before)
-    
-    # Calculate Phase 2 convergence (after transition)
-    phase2_values = diversity_values[transition_epoch:]
-    phase2_convergence = calculate_convergence_metrics(phase2_values, ideal_after)
-    
-    # Calculate resilience metrics
-    resilience = calculate_resilience_metrics(diversity_values, transition_epoch, ideal_before, ideal_after)
-    
-    # Calculate resource efficiency
-    # For phase 1
-    phase1_rewards = rewards_history[:transition_epoch] if transition_epoch <= len(rewards_history) else rewards_history
-    phase1_efficiency = calculate_resource_efficiency(phase1_values, phase1_rewards, ideal_before)
-    
-    # For phase 2
-    phase2_rewards = rewards_history[transition_epoch:] if transition_epoch < len(rewards_history) else []
-    phase2_efficiency = calculate_resource_efficiency(phase2_values, phase2_rewards, ideal_after)
-    
-    # For overall
-    overall_efficiency = calculate_resource_efficiency(diversity_values, rewards_history, 
-                                                     ideal_after)  # Use final ideal as reference
+    # Handle single-phase vs dual-phase analysis
+    if transition_epoch is None:
+        # Single-phase analysis - use the entire run as one phase
+        phase1_values = diversity_values
+        phase1_convergence = calculate_convergence_metrics(phase1_values, ideal_before)
+        
+        # No phase 2 for single-phase
+        phase2_convergence = {
+            'time_to_convergence': None,
+            'convergence_rate': None,
+            'steady_version_error': None,
+            'steady_version_stability': None,
+            'final_diversity_quality': None,
+            'converged': False
+        }
+        
+        # No resilience metrics for single-phase
+        resilience = calculate_resilience_metrics(diversity_values, transition_epoch, ideal_before, ideal_after)
+        
+        # Resource efficiency for entire run
+        overall_efficiency = calculate_resource_efficiency(diversity_values, rewards_history, ideal_before)
+        phase1_efficiency = overall_efficiency.copy()  # Same as overall for single phase
+        phase2_efficiency = {
+            'avg_reward_per_epoch': None,
+            'avg_absolute_reward': None,
+            'total_cumulative_reward': None,
+            'total_absolute_reward': None,
+            'diversity_per_reward_unit': None,
+            'normalized_efficiency': None,
+            'reward_volatility': None,
+            'efficiency_trend': None
+        }
+        
+    else:
+        # Dual-phase analysis (original logic)
+        # Calculate Phase 1 convergence (before transition)
+        phase1_values = diversity_values[:transition_epoch]
+        phase1_convergence = calculate_convergence_metrics(phase1_values, ideal_before)
+        
+        # Calculate Phase 2 convergence (after transition)
+        phase2_values = diversity_values[transition_epoch:]
+        phase2_convergence = calculate_convergence_metrics(phase2_values, ideal_after)
+        
+        # Calculate resilience metrics
+        resilience = calculate_resilience_metrics(diversity_values, transition_epoch, ideal_before, ideal_after)
+        
+        # Calculate resource efficiency
+        # For phase 1
+        phase1_rewards = rewards_history[:transition_epoch] if transition_epoch <= len(rewards_history) else rewards_history
+        phase1_efficiency = calculate_resource_efficiency(phase1_values, phase1_rewards, ideal_before)
+        
+        # For phase 2
+        phase2_rewards = rewards_history[transition_epoch:] if transition_epoch < len(rewards_history) else []
+        phase2_efficiency = calculate_resource_efficiency(phase2_values, phase2_rewards, ideal_after)
+        
+        # For overall
+        overall_efficiency = calculate_resource_efficiency(diversity_values, rewards_history, 
+                                                         ideal_after)  # Use final ideal as reference
     
     # Calculate PID parameter evolution metrics if available
     pid_evolution = None

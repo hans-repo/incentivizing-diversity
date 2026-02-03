@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from agent import *
 
-def ziegler_nichols_tuning(agents, possible_states, epochs=1000, n_agents=100):
+def ziegler_nichols_tuning(agents, possible_versions, epochs=1000, n_agents=100):
     """
     Implement Ziegler-Nichols PID tuning method by finding critical gain and period.
     Returns tuned P, I, D parameters based on critical gain (Ku) and critical period (Tu).
@@ -13,8 +13,8 @@ def ziegler_nichols_tuning(agents, possible_states, epochs=1000, n_agents=100):
     test_epochs = 500  # Number of epochs per test
     num_attributes = 1  # For simplicity, tune for one attribute
     
-    # Storage for state distribution history to detect oscillations
-    state_history = []
+    # Storage for version distribution history to detect oscillations
+    version_history = []
     
     # Start with low gain and increase until we see sustained oscillations
     Kp_values = np.logspace(2.8, 5, 1000)  # Test range from 1 to 10000
@@ -25,44 +25,44 @@ def ziegler_nichols_tuning(agents, possible_states, epochs=1000, n_agents=100):
         print(f"Testing Kp = {Kp}")
         
         # Reset for this test
-        state_rewards = [{state: 0 for state in possible_states} for _ in range(num_attributes)]
-        accumulated_error = [{state: 0 for state in possible_states} for _ in range(num_attributes)]
-        last_error = [{state: 0 for state in possible_states} for _ in range(num_attributes)]
+        version_rewards = [{version: 0 for version in possible_versions} for _ in range(num_attributes)]
+        accumulated_error = [{version: 0 for version in possible_versions} for _ in range(num_attributes)]
+        last_error = [{version: 0 for version in possible_versions} for _ in range(num_attributes)]
 
         
         # Create fresh agents for each test
-        test_run_costs = {state: 100 for state in possible_states}  # Simplified run costs
-        test_switch_costs = {state: 100 for state in possible_states}  # Simplified switch costs
+        test_run_costs = {version: 100 for version in possible_versions}  # Simplified run costs
+        test_switch_costs = {version: 100 for version in possible_versions}  # Simplified switch costs
         switch_frequency_param = 5  # Default value for tuning phase
-        test_agents = generate_agents(n_agents, possible_states, state_rewards, test_run_costs, test_switch_costs, switch_frequency_param)
+        test_agents = generate_agents(n_agents, possible_versions, version_rewards, test_run_costs, test_switch_costs, switch_frequency_param)
         # For detecting oscillations
-        state_counts_history = []
+        version_counts_history = []
         
         # Run simulation with current Kp (P only controller)
         for epoch in range(test_epochs):
             # P-only control (Ki=0, Kd=0)
-            state_rewards, accumulated_error, last_error = update_state_rewards(
-                test_agents, possible_states, state_rewards, accumulated_error, last_error, 
+            version_rewards, accumulated_error, last_error = update_version_rewards(
+                test_agents, possible_versions, version_rewards, accumulated_error, last_error, 
                 Kp, 0, 0)  # P only, I=0, D=0
                 
-            state_rewards_last_epoch = distribute_rewards(test_agents, possible_states, state_rewards)
+            version_rewards_last_epoch = distribute_rewards(test_agents, possible_versions, version_rewards)
             
-            # Record state distribution to detect oscillations
-            state_counts = {state: 0 for state in possible_states}
+            # Record version distribution to detect oscillations
+            version_counts = {version: 0 for version in possible_versions}
             for agent in test_agents:
-                state_counts[agent.declared_state[0]] += 1
-            state_counts_history.append(state_counts)
+                version_counts[agent.declared_version[0]] += 1
+            version_counts_history.append(version_counts)
             
             # Update agent decisions
             for agent in test_agents:
-                agent.decision(state_rewards_last_epoch, malicious=False)
+                agent.decision(version_rewards_last_epoch, malicious=False)
         
         # Check for sustained oscillations in the second half of the simulation
-        analysis_window = state_counts_history[test_epochs//2:]
+        analysis_window = version_counts_history[test_epochs//2:]
         
-        # Extract counts for one state (any non-NO_STATE) to analyze oscillations
-        oscillation_state = [state for state in possible_states if state != 'NO_STATE'][0]
-        counts = [d[oscillation_state] for d in analysis_window]
+        # Extract counts for one version (any non-NO_version) to analyze oscillations
+        oscillation_version = [version for version in possible_versions if version != 'NO_version'][0]
+        counts = [d[oscillation_version] for d in analysis_window]
         
         # Detect oscillations using FFT
         if len(counts) > 10:  # Ensure enough data points
@@ -92,7 +92,7 @@ def ziegler_nichols_tuning(agents, possible_states, epochs=1000, n_agents=100):
                         # plt.plot(counts)
                         # plt.title(f"Oscillation at Critical Gain Ku={Ku:.2f}, Period Tu={Tu:.2f}")
                         # plt.xlabel("Epoch")
-                        # plt.ylabel(f"Agents in {oscillation_state}")
+                        # plt.ylabel(f"Agents in {oscillation_version}")
                         # plt.grid(True)
                         # plt.show()
                         

@@ -7,38 +7,38 @@ import torch.nn.functional as F
 from collections import deque, namedtuple
 
 # Define experience tuple structure
-Experience = namedtuple('Experience', ['state', 'action', 'reward', 'next_state', 'done'])
+Experience = namedtuple('Experience', ['version', 'action', 'reward', 'next_version', 'done'])
 
 class ReplayBuffer:
     """Experience replay buffer to store and sample experiences"""
     
     def __init__(self, capacity=10000):
         self.buffer = deque(maxlen=capacity)
-        self.state_dim = None  # Track state dimension
+        self.version_dim = None  # Track version dimension
         self.action_dim = None  # Track action dimension
     
-    def add(self, state, action, reward, next_state, done):
+    def add(self, version, action, reward, next_version, done):
         """Add experience to buffer"""
         # Check and update dimensions on first addition
         if len(self.buffer) == 0:
-            self.state_dim = len(state)
+            self.version_dim = len(version)
             if isinstance(action, (np.ndarray, list)):
                 self.action_dim = len(action)
             else:
                 self.action_dim = 1  # Scalar action
             
         # Skip adding experiences if dimensions don't match
-        if len(state) != self.state_dim:
-            print(f"Skipping experience with mismatched state dimension: got {len(state)}, expected {self.state_dim}")
+        if len(version) != self.version_dim:
+            print(f"Skipping experience with mismatched version dimension: got {len(version)}, expected {self.version_dim}")
             return
             
         if isinstance(action, (np.ndarray, list)) and len(action) != self.action_dim:
             print(f"Skipping experience with mismatched action dimension: got {len(action)}, expected {self.action_dim}")
             return
             
-        # Make a copy of state and next_state to ensure they don't get modified
-        state_copy = state.copy() if isinstance(state, (list, np.ndarray)) else state
-        next_state_copy = next_state.copy() if isinstance(next_state, (list, np.ndarray)) else next_state
+        # Make a copy of version and next_version to ensure they don't get modified
+        version_copy = version.copy() if isinstance(version, (list, np.ndarray)) else version
+        next_version_copy = next_version.copy() if isinstance(next_version, (list, np.ndarray)) else next_version
         
         # Make a copy of action to ensure it doesn't get modified
         if isinstance(action, (list, np.ndarray)):
@@ -46,7 +46,7 @@ class ReplayBuffer:
         else:
             action_copy = action
             
-        experience = Experience(state_copy, action_copy, reward, next_state_copy, done)
+        experience = Experience(version_copy, action_copy, reward, next_version_copy, done)
         self.buffer.append(experience)
     
     def sample(self, batch_size):
@@ -59,7 +59,7 @@ class ReplayBuffer:
             experiences = random.sample(self.buffer, min(batch_size, len(self.buffer)))
             
             # Convert experiences to numpy arrays first for safer handling
-            states = np.array([list(e.state) for e in experiences])  # Ensure state is listified
+            versions = np.array([list(e.version) for e in experiences])  # Ensure version is listified
             
             # Handle actions - make sure they're all the same type (list or scalar)
             if isinstance(experiences[0].action, (np.ndarray, list)):
@@ -69,17 +69,17 @@ class ReplayBuffer:
                 actions = np.array([[e.action] for e in experiences])
                 
             rewards = np.array([[e.reward] for e in experiences])
-            next_states = np.array([list(e.next_state) for e in experiences])  # Ensure state is listified
+            next_versions = np.array([list(e.next_version) for e in experiences])  # Ensure version is listified
             dones = np.array([[e.done] for e in experiences])
             
             # Convert to tensors
-            states_tensor = torch.FloatTensor(states)
+            versions_tensor = torch.FloatTensor(versions)
             actions_tensor = torch.FloatTensor(actions)
             rewards_tensor = torch.FloatTensor(rewards)
-            next_states_tensor = torch.FloatTensor(next_states)
+            next_versions_tensor = torch.FloatTensor(next_versions)
             dones_tensor = torch.FloatTensor(dones)
             
-            return states_tensor, actions_tensor, rewards_tensor, next_states_tensor, dones_tensor
+            return versions_tensor, actions_tensor, rewards_tensor, next_versions_tensor, dones_tensor
             
         except (ValueError, RuntimeError) as e:
             print(f"Error sampling from replay buffer: {e}")
@@ -95,16 +95,16 @@ class ReplayBuffer:
     def clear(self):
         """Clear the replay buffer"""
         self.buffer.clear()
-        self.state_dim = None
+        self.version_dim = None
         self.action_dim = None
 
 
 class DQNModel(nn.Module):
     """Deep Q-Network model"""
     
-    def __init__(self, state_dim, action_dim, hidden_dim=64):
+    def __init__(self, version_dim, action_dim, hidden_dim=64):
         super(DQNModel, self).__init__()
-        self.fc1 = nn.Linear(state_dim, hidden_dim)
+        self.fc1 = nn.Linear(version_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.fc3 = nn.Linear(hidden_dim, action_dim)
         
@@ -133,73 +133,73 @@ class DQNModel(nn.Module):
 class RewardController:
     """Base class for reward controllers"""
     
-    def __init__(self, states, attribute_idx=0):
-        self.states = states
+    def __init__(self, versions, attribute_idx=0):
+        self.versions = versions
         self.attribute_idx = attribute_idx
     
-    def update_rewards(self, agents, current_states, state_rewards, *args, **kwargs):
-        """Update rewards based on current state distribution"""
+    def update_rewards(self, agents, current_versions, version_rewards, *args, **kwargs):
+        """Update rewards based on current version distribution"""
         raise NotImplementedError
 
 
 class PIDController(RewardController):
     """PID controller for reward adjustment"""
     
-    def __init__(self, states, p_param, i_param, d_param, attribute_idx=0):
-        super(PIDController, self).__init__(states, attribute_idx)
+    def __init__(self, versions, p_param, i_param, d_param, attribute_idx=0):
+        super(PIDController, self).__init__(versions, attribute_idx)
         self.p_param = p_param
         self.i_param = i_param
         self.d_param = d_param
-        self.accumulated_error = {state: 0 for state in states}
-        self.last_error = {state: 0 for state in states}
+        self.accumulated_error = {version: 0 for version in versions}
+        self.last_error = {version: 0 for version in versions}
     
-    def update_rewards(self, agents, current_states, state_rewards, *args, **kwargs):
+    def update_rewards(self, agents, current_versions, version_rewards, *args, **kwargs):
         """Update rewards using PID control"""
-        state_counts = {state: 0 for state in current_states}
+        version_counts = {version: 0 for version in current_versions}
         for agent in agents:
-            state_counts[agent.declared_state[self.attribute_idx]] += 1
+            version_counts[agent.declared_version[self.attribute_idx]] += 1
         
-        for state in current_states:
-            if state == 'NO_STATE':
-                state_rewards[self.attribute_idx][state] = 0
+        for version in current_versions:
+            if version == 'NO_version':
+                version_rewards[self.attribute_idx][version] = 0
             else:
-                state_share = state_counts[state] / len(agents)
-                ideal_share = 1 / (len(current_states) - 1)  # -1 for NO_STATE
-                error = (ideal_share - state_share)
+                version_share = version_counts[version] / len(agents)
+                ideal_share = 1 / (len(current_versions) - 1)  # -1 for NO_version
+                error = (ideal_share - version_share)
                 
-                # Update accumulated error if state exists in it, otherwise initialize it
-                if state in self.accumulated_error:
-                    self.accumulated_error[state] += error
+                # Update accumulated error if version exists in it, otherwise initialize it
+                if version in self.accumulated_error:
+                    self.accumulated_error[version] += error
                 else:
-                    self.accumulated_error[state] = error
+                    self.accumulated_error[version] = error
                     
                 # Get last error, default to 0 if not found
-                last_err = self.last_error.get(state, 0)
+                last_err = self.last_error.get(version, 0)
                 
                 # PID terms
                 p_term = self.p_param * error
-                i_term = self.i_param * self.accumulated_error[state]
+                i_term = self.i_param * self.accumulated_error[version]
                 d_term = self.d_param * (error - last_err)
                 
                 # Update rewards
-                state_rewards[self.attribute_idx][state] = p_term + i_term + d_term
+                version_rewards[self.attribute_idx][version] = p_term + i_term + d_term
             
                 # Store current error as last error for next iteration
-                self.last_error[state] = error
+                self.last_error[version] = error
         
-        return state_rewards
+        return version_rewards
 
 
 class RLPIDController(RewardController):
     """RL-based PID parameter tuner - adaptively learns reward scale and PID parameters"""
     
-    def __init__(self, states, n_agents, initial_p=0, initial_i=0, initial_d=0,
+    def __init__(self, versions, n_agents, initial_p=0, initial_i=0, initial_d=0,
                  epsilon=1.0, epsilon_decay=0.995, 
                  epsilon_min=0.01, gamma=0.99, learning_rate=0.001, batch_size=32, 
                  update_frequency=10, target_update_frequency=100, attribute_idx=0,
                  action_scale=0.1,
                  p_scale_factor=None, i_scale_factor=None, d_scale_factor=None):
-        super(RLPIDController, self).__init__(states, attribute_idx)
+        super(RLPIDController, self).__init__(versions, attribute_idx)
         
         # RL parameters
         self.n_agents = n_agents
@@ -233,26 +233,26 @@ class RLPIDController(RewardController):
         self.max_i = self.reward_scale * self.i_scale_factor
         self.max_d = self.reward_scale * self.d_scale_factor
         
-        # PID state tracking
-        self.accumulated_error = {state: 0 for state in states}
-        self.last_error = {state: 0 for state in states}
+        # PID version tracking
+        self.accumulated_error = {version: 0 for version in versions}
+        self.last_error = {version: 0 for version in versions}
         
         # Anti-windup for I term - prevent integral accumulation from getting too large
         self.i_term_max = self.reward_scale * 5  # Initial value, will be adjusted
         
-        # Track current agent distribution for state representation
-        self.agent_counts = {state: 0 for state in states}
+        # Track current agent distribution for version representation
+        self.agent_counts = {version: 0 for version in versions}
         
-        # Define state and action dimensions
-        # State includes: agent distribution + current PID parameters + current reward scale
-        self.state_dim = len(states) + 4  # +3 for current P, I, D values, +1 for reward scale
+        # Define version and action dimensions
+        # version includes: agent distribution + current PID parameters + current reward scale
+        self.version_dim = len(versions) + 4  # +3 for current P, I, D values, +1 for reward scale
         
         # Actions: adjustments to P, I, D, and reward_scale
         self.action_dim = 4  # One action dimension for each PID parameter + reward scale
         
         # Initialize models
-        self.policy_net = DQNModel(self.state_dim, self.action_dim)
-        self.target_net = DQNModel(self.state_dim, self.action_dim)
+        self.policy_net = DQNModel(self.version_dim, self.action_dim)
+        self.target_net = DQNModel(self.version_dim, self.action_dim)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.learning_rate)
         
@@ -263,13 +263,13 @@ class RLPIDController(RewardController):
         self.steps_done = 0
         self.epoch = 0
         
-        # Store previous state
-        self.prev_state = None
+        # Store previous version
+        self.prev_version = None
         self.prev_action = None
         
-        # Store state mapping (index to state name)
-        self.state_to_idx = {state: i for i, state in enumerate(states)}
-        self.idx_to_state = {i: state for i, state in enumerate(self.states)}
+        # Store version mapping (index to version name)
+        self.version_to_idx = {version: i for i, version in enumerate(versions)}
+        self.idx_to_version = {i: version for i, version in enumerate(self.versions)}
         
         # Previous diversity for reward calculation
         self.prev_diversity = 0
@@ -291,7 +291,7 @@ class RLPIDController(RewardController):
     
     def update_adaptive_bounds(self, current_rewards):
         """Update adaptive bounds for PID parameters based on observed rewards"""
-        # Extract the maximum absolute reward value in the current state
+        # Extract the maximum absolute reward value in the current version
         current_max_reward = max([abs(r) for r in current_rewards.values() if r != 0], default=0)
         
         # No artificial caps on rewards
@@ -313,31 +313,31 @@ class RLPIDController(RewardController):
         # Update I-term max based on current reward scale
         self.i_term_max = self.reward_scale * 5
         
-    def get_state_representation(self, agents, current_states):
-        """Create state representation: [agent distribution, P, I, D, reward_scale]"""
+    def get_version_representation(self, agents, current_versions):
+        """Create version representation: [agent distribution, P, I, D, reward_scale]"""
         # Get agent distribution
-        state_counts = {state: 0 for state in current_states}
+        version_counts = {version: 0 for version in current_versions}
         for agent in agents:
-            state_counts[agent.declared_state[self.attribute_idx]] += 1
+            version_counts[agent.declared_version[self.attribute_idx]] += 1
         
-        # Update state mappings if they don't match current states
-        if set(current_states) != set(self.state_to_idx.keys()):
-            print(f"Updating state mappings: {len(self.state_to_idx)} -> {len(current_states)} states")
-            self.state_to_idx = {state: i for i, state in enumerate(current_states)}
-            self.idx_to_state = {i: state for i, state in enumerate(current_states)}
+        # Update version mappings if they don't match current versions
+        if set(current_versions) != set(self.version_to_idx.keys()):
+            print(f"Updating version mappings: {len(self.version_to_idx)} -> {len(current_versions)} versions")
+            self.version_to_idx = {version: i for i, version in enumerate(current_versions)}
+            self.idx_to_version = {i: version for i, version in enumerate(current_versions)}
         
-        # Create state vector with correct size based on current states
-        state_vector = np.zeros(len(current_states))
+        # Create version vector with correct size based on current versions
+        version_vector = np.zeros(len(current_versions))
         
-        # Fill in the state distribution
-        for state, count in state_counts.items():
-            if state in self.state_to_idx:
-                idx = self.state_to_idx[state]
+        # Fill in the version distribution
+        for version, count in version_counts.items():
+            if version in self.version_to_idx:
+                idx = self.version_to_idx[version]
                 # Safety check to prevent index out of bounds
-                if idx < len(state_vector):
-                    state_vector[idx] = count / self.n_agents
+                if idx < len(version_vector):
+                    version_vector[idx] = count / self.n_agents
                 else:
-                    print(f"Warning: State {state} has index {idx} but vector size is {len(state_vector)}")
+                    print(f"Warning: version {version} has index {idx} but vector size is {len(version_vector)}")
         
         # Use logarithmic normalization for PID parameters to handle a wide range of values
         # Add a small constant to avoid log(0)
@@ -354,34 +354,34 @@ class RLPIDController(RewardController):
         norm_d = np.clip(norm_d, 0, 1)
         norm_reward_scale = np.clip(norm_reward_scale, 0, 1)
         
-        # Combine state vector with normalized parameters
-        full_state = np.append(state_vector, [norm_p, norm_i, norm_d, norm_reward_scale])
+        # Combine version vector with normalized parameters
+        full_version = np.append(version_vector, [norm_p, norm_i, norm_d, norm_reward_scale])
         
-        # Update expected state dimension based on current states
-        expected_state_dim = len(current_states) + 4  # +3 for PID params, +1 for reward_scale
+        # Update expected version dimension based on current versions
+        expected_version_dim = len(current_versions) + 4  # +3 for PID params, +1 for reward_scale
         
-        # If state dimension changed, update it
-        if self.state_dim != expected_state_dim:
-            print(f"State dimension changed: {self.state_dim} -> {expected_state_dim}")
-            self.state_dim = expected_state_dim
+        # If version dimension changed, update it
+        if self.version_dim != expected_version_dim:
+            print(f"version dimension changed: {self.version_dim} -> {expected_version_dim}")
+            self.version_dim = expected_version_dim
         
-        # Verify that the state vector has the expected dimension
-        if len(full_state) != self.state_dim:
-            print(f"Warning: State dimension mismatch in get_state_representation. Got {len(full_state)}, expected {self.state_dim}")
-            print(f"Current states: {len(current_states)}, state vector length: {len(state_vector)}")
+        # Verify that the version vector has the expected dimension
+        if len(full_version) != self.version_dim:
+            print(f"Warning: version dimension mismatch in get_version_representation. Got {len(full_version)}, expected {self.version_dim}")
+            print(f"Current versions: {len(current_versions)}, version vector length: {len(version_vector)}")
             
-            # Adjust the state vector to match expected dimension
-            if len(full_state) < self.state_dim:
+            # Adjust the version vector to match expected dimension
+            if len(full_version) < self.version_dim:
                 # Pad with zeros if too short
-                full_state = np.pad(full_state, (0, self.state_dim - len(full_state)), 'constant')
+                full_version = np.pad(full_version, (0, self.version_dim - len(full_version)), 'constant')
             else:
                 # Truncate if too long
-                full_state = full_state[:self.state_dim]
+                full_version = full_version[:self.version_dim]
         
-        return full_state.tolist()  # Convert to list for consistent serialization
+        return full_version.tolist()  # Convert to list for consistent serialization
 
     
-    def select_action(self, state):
+    def select_action(self, version):
         """Select action using epsilon-greedy policy with conservative bounds"""
         # Dramatically reduce exploration when diversity is already good
         effective_epsilon = self.epsilon
@@ -392,9 +392,9 @@ class RLPIDController(RewardController):
         else:
             # Exploitation: choose best action according to policy network
             with torch.no_grad():
-                state_tensor = torch.FloatTensor(state).unsqueeze(0)
+                version_tensor = torch.FloatTensor(version).unsqueeze(0)
                 # Output already constrained by tanh in the network
-                return self.policy_net(state_tensor).squeeze().numpy()
+                return self.policy_net(version_tensor).squeeze().numpy()
     
     def update_model(self):
         """Update the policy network using a batch of experiences"""
@@ -407,15 +407,15 @@ class RLPIDController(RewardController):
             # If sampling failed, skip update
             return
             
-        states, actions, rewards, next_states, dones = batch
+        versions, actions, rewards, next_versions, dones = batch
         
         try:
             # Compute current Q values
-            current_q_values = self.policy_net(states)
+            current_q_values = self.policy_net(versions)
             
             # Compute next Q values using target network
             with torch.no_grad():
-                next_q_values = self.target_net(next_states).max(1)[0].unsqueeze(1)
+                next_q_values = self.target_net(next_versions).max(1)[0].unsqueeze(1)
             
             # Compute target Q values
             target_q_values = rewards + (1 - dones) * self.gamma * next_q_values
@@ -500,7 +500,7 @@ class RLPIDController(RewardController):
     # 3. Adaptive bounds based on observed rewards
     def update_adaptive_bounds(self, current_rewards):
         """Update adaptive bounds for PID parameters based on observed rewards"""
-        # Extract the maximum absolute reward value in the current state
+        # Extract the maximum absolute reward value in the current version
         current_max_reward = max([abs(r) for r in current_rewards.values() if r != 0], default=0)
         
         # Track the max observed reward - this adapts to the system's natural scale
@@ -529,21 +529,21 @@ class RLPIDController(RewardController):
             print(f"Adaptive bounds: max_p={self.max_p:.1f}, max_i={self.max_i:.1f}, "
                 f"max_d={self.max_d:.1f}, max_observed_reward={self.max_observed_reward:.1f}")
     
-    def update_rewards_using_pid(self, agents, current_states, state_rewards):
+    def update_rewards_using_pid(self, agents, current_versions, version_rewards):
         """Apply PID control to update rewards based on current parameters"""
-        state_counts = {state: 0 for state in current_states}
+        version_counts = {version: 0 for version in current_versions}
         for agent in agents:
-            state_counts[agent.declared_state[self.attribute_idx]] += 1
+            version_counts[agent.declared_version[self.attribute_idx]] += 1
         
         # Reset accumulated error if it gets too large (anti-windup)
-        for state, error in self.accumulated_error.items():
+        for version, error in self.accumulated_error.items():
             if abs(error) > self.i_term_max / max(0.001, self.i_param):
-                self.accumulated_error[state] = np.sign(error) * self.i_term_max / max(0.001, self.i_param)
+                self.accumulated_error[version] = np.sign(error) * self.i_term_max / max(0.001, self.i_param)
         
         # Track total allocated rewards
         total_rewards = 0
         
-        # Check if we're in a state transition period
+        # Check if we're in a version transition period
         in_transition = hasattr(self, 'in_transition') and self.in_transition
         
         # Update transition progress if we're in transition mode
@@ -554,76 +554,76 @@ class RLPIDController(RewardController):
                 self.in_transition = False
                 self.transition_progress = 1.0
         
-        for state in current_states:
-            if state == 'NO_STATE':
-                state_rewards[self.attribute_idx][state] = 0
+        for version in current_versions:
+            if version == 'NO_version':
+                version_rewards[self.attribute_idx][version] = 0
             else:
                 # Calculate regular PID control values
-                state_share = state_counts[state] / len(agents)
-                ideal_share = 1 / (len(current_states) - 1)  # -1 for NO_STATE
-                error = (ideal_share - state_share)
+                version_share = version_counts[version] / len(agents)
+                ideal_share = 1 / (len(current_versions) - 1)  # -1 for NO_version
+                error = (ideal_share - version_share)
                 
-                # Update accumulated error if state exists in it, otherwise initialize it
-                if state in self.accumulated_error:
-                    self.accumulated_error[state] += error
+                # Update accumulated error if version exists in it, otherwise initialize it
+                if version in self.accumulated_error:
+                    self.accumulated_error[version] += error
                 else:
-                    self.accumulated_error[state] = error
+                    self.accumulated_error[version] = error
                     
                 # Get last error, default to 0 if not found
-                last_err = self.last_error.get(state, 0)
+                last_err = self.last_error.get(version, 0)
                 
                 # Apply anti-windup for I term - still needed for numerical stability
-                if abs(self.accumulated_error[state]) > self.i_term_max / max(0.001, self.i_param):
-                    self.accumulated_error[state] = np.sign(self.accumulated_error[state]) * self.i_term_max / max(0.001, self.i_param)
+                if abs(self.accumulated_error[version]) > self.i_term_max / max(0.001, self.i_param):
+                    self.accumulated_error[version] = np.sign(self.accumulated_error[version]) * self.i_term_max / max(0.001, self.i_param)
                 
                 # PID terms
                 p_term = self.p_param * error
-                i_term = self.i_param * self.accumulated_error[state]
+                i_term = self.i_param * self.accumulated_error[version]
                 d_term = self.d_param * (error - last_err)
                 
                 # Calculate new reward based on PID control
                 new_reward = p_term + i_term + d_term
                 
                 # if self.steps_done % 500 == 0:  # Log every 5 steps during transition
-                #     print(f"DEBUG {state}: ideal_share={ideal_share:.3f}, state_share={state_share:.3f}, error={error:.3f}")
+                #     print(f"DEBUG {version}: ideal_share={ideal_share:.3f}, version_share={version_share:.3f}, error={error:.3f}")
                 #     print(f"  PID params: P={self.p_param:.1f}, I={self.i_param:.1f}, D={self.d_param:.1f}")
-                #     print(f"  Accumulated_error={self.accumulated_error[state]:.3f}, last_err={last_err:.3f}")
+                #     print(f"  Accumulated_error={self.accumulated_error[version]:.3f}, last_err={last_err:.3f}")
                 #     print(f"  Terms: P={p_term:.1f}, I={i_term:.1f}, D={d_term:.1f}, Total={new_reward:.1f}")
                 #     print(f"  Reward scale: {self.reward_scale:.1f}")
                 
-                state_rewards[self.attribute_idx][state] = new_reward
+                version_rewards[self.attribute_idx][version] = new_reward
                 
                 # Track total rewards allocated (absolute value)
-                total_rewards += abs(state_rewards[self.attribute_idx][state])
+                total_rewards += abs(version_rewards[self.attribute_idx][version])
                 
                 # Store current error as last error for next iteration
-                self.last_error[state] = error
+                self.last_error[version] = error
         
         # Store total rewards for efficiency calculation
         
         self.prev_total_rewards = total_rewards
         
         # Update adaptive bounds based on observed rewards
-        self.update_adaptive_bounds(state_rewards[self.attribute_idx])
+        self.update_adaptive_bounds(version_rewards[self.attribute_idx])
         
-        return state_rewards, total_rewards
+        return version_rewards, total_rewards
         
-    def update_rewards(self, agents, current_states, state_rewards, current_diversity=None, 
+    def update_rewards(self, agents, current_versions, version_rewards, current_diversity=None, 
                     ideal_diversity=None, epoch=None, *args, **kwargs):
         """Update rewards using RL-tuned PID control"""
         # Increment epoch counter
         self.epoch = epoch if epoch is not None else self.epoch + 1
         
-        # Check if we need to update our state and action dimensions
-        states_changed = False
-        if len(current_states) != len(self.states) or set(current_states) != set(self.states):
-            print(f"State set changed: {len(self.states)} -> {len(current_states)}")
-            print(f"Old states: {self.states}")
-            print(f"New states: {current_states}")
+        # Check if we need to update our version and action dimensions
+        versions_changed = False
+        if len(current_versions) != len(self.versions) or set(current_versions) != set(self.versions):
+            print(f"version set changed: {len(self.versions)} -> {len(current_versions)}")
+            print(f"Old versions: {self.versions}")
+            print(f"New versions: {current_versions}")
             
             # Store old dimensions
-            old_state_dim = self.state_dim
-            old_states = self.states.copy()
+            old_version_dim = self.version_dim
+            old_versions = self.versions.copy()
             
             if hasattr(self, 'good_reward_scale'):
                 preserved_reward_scale = self.good_reward_scale
@@ -634,49 +634,49 @@ class RLPIDController(RewardController):
 
             old_epsilon = self.epsilon
             self.epsilon = self.initial_epsilon
-            print(f"New state detected - resetting exploration rate: {old_epsilon:.3f} -> {self.epsilon:.3f}")
+            print(f"New version detected - resetting exploration rate: {old_epsilon:.3f} -> {self.epsilon:.3f}")
 
 
-            # Update state set and dimensions
-            self.states = list(current_states)  # Convert to list to ensure consistent ordering
-            self.state_dim = len(self.states) + 4  # +3 for PID params, +1 for reward_scale
+            # Update version set and dimensions
+            self.versions = list(current_versions)  # Convert to list to ensure consistent ordering
+            self.version_dim = len(self.versions) + 4  # +3 for PID params, +1 for reward_scale
             
-            # Update state mapping - IMPORTANT: Use consistent ordering
-            self.state_to_idx = {state: i for i, state in enumerate(self.states)}
-            self.idx_to_state = {i: state for i, state in enumerate(self.states)}
+            # Update version mapping - IMPORTANT: Use consistent ordering
+            self.version_to_idx = {version: i for i, version in enumerate(self.versions)}
+            self.idx_to_version = {i: version for i, version in enumerate(self.versions)}
             
-            # Initialize accumulated error and last error for new states
-            for state in current_states:
-                if state not in self.accumulated_error:
-                    self.accumulated_error[state] = 0
-                if state not in self.last_error:
-                    self.last_error[state] = 0
+            # Initialize accumulated error and last error for new versions
+            for version in current_versions:
+                if version not in self.accumulated_error:
+                    self.accumulated_error[version] = 0
+                if version not in self.last_error:
+                    self.last_error[version] = 0
             
             # Scale accumulated errors for the new ideal distribution
-            old_ideal_share = 1 / (len(old_states) - 1) if len(old_states) > 1 else 0  # -1 for NO_STATE
-            new_ideal_share = 1 / (len(current_states) - 1) if len(current_states) > 1 else 0  # -1 for NO_STATE
+            old_ideal_share = 1 / (len(old_versions) - 1) if len(old_versions) > 1 else 0  # -1 for NO_version
+            new_ideal_share = 1 / (len(current_versions) - 1) if len(current_versions) > 1 else 0  # -1 for NO_version
 
             if old_ideal_share > 0 and new_ideal_share > 0:
                 error_scale_factor = old_ideal_share / new_ideal_share
                 print(f"Scaling accumulated errors by factor: {error_scale_factor:.3f} (old ideal: {old_ideal_share:.3f} -> new ideal: {new_ideal_share:.3f})")
                 
-                # Scale existing accumulated errors for existing states
-                for state in current_states:
-                    if state in self.accumulated_error and state != 'NO_STATE':
-                        old_error = self.accumulated_error[state]
-                        self.accumulated_error[state] *= error_scale_factor
+                # Scale existing accumulated errors for existing versions
+                for version in current_versions:
+                    if version in self.accumulated_error and version != 'NO_version':
+                        old_error = self.accumulated_error[version]
+                        self.accumulated_error[version] *= error_scale_factor
                         if abs(old_error) > 0.001:  # Only log significant errors
-                            print(f"Scaled accumulated error for {state}: {old_error:.3f} -> {self.accumulated_error[state]:.3f}")
+                            print(f"Scaled accumulated error for {version}: {old_error:.3f} -> {self.accumulated_error[version]:.3f}")
 
-            states_changed = True
+            versions_changed = True
             
-            # If state dimensions changed, preserve network weights where possible
-            if old_state_dim != self.state_dim:
-                print(f"Adapting RL model for new dimensions. State dim: {old_state_dim} -> {self.state_dim}")
+            # If version dimensions changed, preserve network weights where possible
+            if old_version_dim != self.version_dim:
+                print(f"Adapting RL model for new dimensions. version dim: {old_version_dim} -> {self.version_dim}")
                 
                 # Create new networks with updated dimensions
-                new_policy_net = DQNModel(self.state_dim, self.action_dim)
-                new_target_net = DQNModel(self.state_dim, self.action_dim)
+                new_policy_net = DQNModel(self.version_dim, self.action_dim)
+                new_target_net = DQNModel(self.version_dim, self.action_dim)
                 
                 # Transfer existing weights for the common dimensions
                 with torch.no_grad():
@@ -687,21 +687,21 @@ class RLPIDController(RewardController):
                     old_target_bias = self.target_net.fc1.bias.data
                     
                     # Determine the minimum dimension to copy
-                    # For states, we need to be more careful about which states to preserve
-                    old_state_count = len(old_states)
-                    new_state_count = len(self.states)
-                    common_state_count = min(old_state_count, new_state_count)
+                    # For versions, we need to be more careful about which versions to preserve
+                    old_version_count = len(old_versions)
+                    new_version_count = len(self.versions)
+                    common_version_count = min(old_version_count, new_version_count)
                     
-                    # Copy weights for the common state dimensions (first part of input)
-                    new_policy_net.fc1.weight.data[:, :common_state_count] = old_policy_weights[:, :common_state_count]
-                    new_target_net.fc1.weight.data[:, :common_state_count] = old_target_weights[:, :common_state_count]
+                    # Copy weights for the common version dimensions (first part of input)
+                    new_policy_net.fc1.weight.data[:, :common_version_count] = old_policy_weights[:, :common_version_count]
+                    new_target_net.fc1.weight.data[:, :common_version_count] = old_target_weights[:, :common_version_count]
                     
                     # Copy the PID parameter weights (last 4 dimensions)
                     # These should always be in the same position relative to the end
-                    pid_param_start_old = old_state_count
-                    pid_param_start_new = new_state_count
+                    pid_param_start_old = old_version_count
+                    pid_param_start_new = new_version_count
                     
-                    if old_state_dim >= 4 and self.state_dim >= 4:
+                    if old_version_dim >= 4 and self.version_dim >= 4:
                         # Copy PID parameter weights
                         new_policy_net.fc1.weight.data[:, pid_param_start_new:pid_param_start_new+4] = \
                             old_policy_weights[:, pid_param_start_old:pid_param_start_old+4]
@@ -735,29 +735,29 @@ class RLPIDController(RewardController):
                     
                     for exp in self.replay_buffer.buffer:
                         try:
-                            # Create new state representations based on the dimension change
-                            old_state_part = list(exp.state)[:old_state_count]  # Old state distribution
-                            old_pid_part = list(exp.state)[old_state_count:old_state_count+4]  # PID params
+                            # Create new version representations based on the dimension change
+                            old_version_part = list(exp.version)[:old_version_count]  # Old version distribution
+                            old_pid_part = list(exp.version)[old_version_count:old_version_count+4]  # PID params
                             
-                            old_next_state_part = list(exp.next_state)[:old_state_count]
-                            old_next_pid_part = list(exp.next_state)[old_state_count:old_state_count+4]
+                            old_next_version_part = list(exp.next_version)[:old_version_count]
+                            old_next_pid_part = list(exp.next_version)[old_version_count:old_version_count+4]
                             
-                            # Create new state representation
-                            if new_state_count > old_state_count:
-                                # Adding states - pad state distribution with zeros
-                                new_state_part = old_state_part + [0.0] * (new_state_count - old_state_count)
-                                new_next_state_part = old_next_state_part + [0.0] * (new_state_count - old_state_count)
+                            # Create new version representation
+                            if new_version_count > old_version_count:
+                                # Adding versions - pad version distribution with zeros
+                                new_version_part = old_version_part + [0.0] * (new_version_count - old_version_count)
+                                new_next_version_part = old_next_version_part + [0.0] * (new_version_count - old_version_count)
                             else:
-                                # Removing states - truncate state distribution
-                                new_state_part = old_state_part[:new_state_count]
-                                new_next_state_part = old_next_state_part[:new_state_count]
+                                # Removing versions - truncate version distribution
+                                new_version_part = old_version_part[:new_version_count]
+                                new_next_version_part = old_next_version_part[:new_version_count]
                             
                             # Combine with PID parameters
-                            extended_state = new_state_part + old_pid_part
-                            extended_next_state = new_next_state_part + old_next_pid_part
+                            extended_version = new_version_part + old_pid_part
+                            extended_next_version = new_next_version_part + old_next_pid_part
                             
-                            # Create new experience with adjusted states
-                            new_exp = Experience(extended_state, exp.action, exp.reward, extended_next_state, exp.done)
+                            # Create new experience with adjusted versions
+                            new_exp = Experience(extended_version, exp.action, exp.reward, extended_next_version, exp.done)
                             adapted_buffer.append(new_exp)
                             
                         except (IndexError, ValueError) as e:
@@ -766,39 +766,39 @@ class RLPIDController(RewardController):
                     
                     # Replace the buffer with our adapted version
                     self.replay_buffer.buffer = adapted_buffer
-                    self.replay_buffer.state_dim = self.state_dim
+                    self.replay_buffer.version_dim = self.version_dim
                     print(f"Adapted {len(adapted_buffer)} experiences to new dimensions")
                 
-                # Update previous state with appropriate dimensions if it exists
-                if self.prev_state is not None and len(self.prev_state) > 0:
+                # Update previous version with appropriate dimensions if it exists
+                if self.prev_version is not None and len(self.prev_version) > 0:
                     try:
                         # Simple and robust adaptation approach
-                        if len(self.prev_state) < self.state_dim:
-                            # Pad with zeros if state dimension increased
-                            self.prev_state = list(self.prev_state) + [0.0] * (self.state_dim - len(self.prev_state))
-                        elif len(self.prev_state) > self.state_dim:
-                            # Truncate if state dimension decreased  
-                            self.prev_state = self.prev_state[:self.state_dim]
+                        if len(self.prev_version) < self.version_dim:
+                            # Pad with zeros if version dimension increased
+                            self.prev_version = list(self.prev_version) + [0.0] * (self.version_dim - len(self.prev_version))
+                        elif len(self.prev_version) > self.version_dim:
+                            # Truncate if version dimension decreased  
+                            self.prev_version = self.prev_version[:self.version_dim]
                         
                         # Ensure it's a list for consistency
-                        self.prev_state = list(self.prev_state)
-                        print(f"Adapted prev_state to new dimensions: {len(self.prev_state)}")
+                        self.prev_version = list(self.prev_version)
+                        print(f"Adapted prev_version to new dimensions: {len(self.prev_version)}")
                         
                     except Exception as e:
-                        print(f"Error adapting prev_state: {e}, but continuing with adapted version")
-                        # Don't reset to None - try to create a reasonable default state
-                        if self.state_dim > 0:
-                            # Create default state with current agent distribution + current PID params
+                        print(f"Error adapting prev_version: {e}, but continuing with adapted version")
+                        # Don't reset to None - try to create a reasonable default version
+                        if self.version_dim > 0:
+                            # Create default version with current agent distribution + current PID params
                             try:
-                                current_state = self.get_state_representation(agents, current_states)
-                                self.prev_state = current_state
-                                print(f"Created new prev_state from current state: {len(self.prev_state)}")
+                                current_version = self.get_version_representation(agents, current_versions)
+                                self.prev_version = current_version
+                                print(f"Created new prev_version from current version: {len(self.prev_version)}")
                             except:
-                                # Last resort - create zero state
-                                self.prev_state = [0.0] * self.state_dim
-                                print(f"Created zero prev_state: {len(self.prev_state)}")
+                                # Last resort - create zero version
+                                self.prev_version = [0.0] * self.version_dim
+                                print(f"Created zero prev_version: {len(self.prev_version)}")
                 else:
-                    print("prev_state was None, will be set from current state in next iteration")
+                    print("prev_version was None, will be set from current version in next iteration")
             self.reward_scale = preserved_reward_scale
             print(f"Restored reward scale after network adaptation: {self.reward_scale:.1f}")
             
@@ -810,14 +810,14 @@ class RLPIDController(RewardController):
 
         try:
             # Update agent counts for this epoch
-            agent_counts = {state: 0 for state in current_states}
+            agent_counts = {version: 0 for version in current_versions}
             for agent in agents:
-                agent_state = agent.declared_state[self.attribute_idx]
-                agent_counts[agent_state] = agent_counts.get(agent_state, 0) + 1
+                agent_version = agent.declared_version[self.attribute_idx]
+                agent_counts[agent_version] = agent_counts.get(agent_version, 0) + 1
             self.agent_counts = agent_counts
             
-            # Get current state representation
-            current_state = self.get_state_representation(agents, current_states)
+            # Get current version representation
+            current_version = self.get_version_representation(agents, current_versions)
             
             # Calculate current diversity ratio for stability check
             diversity_ratio = 0
@@ -833,7 +833,7 @@ class RLPIDController(RewardController):
                     self.reward_scale = self.stable_reward_scale
 
                 # Apply PID control without changing parameters
-                state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
+                version_rewards, total_rewards = self.update_rewards_using_pid(agents, current_versions, version_rewards)
                 self.prev_total_rewards = total_rewards
                 
                 # Update transition progress
@@ -846,15 +846,15 @@ class RLPIDController(RewardController):
                     if hasattr(self, 'stable_reward_scale'):
                         delattr(self, 'stable_reward_scale')
                 
-                # Update previous state for next iteration (but not action since we didn't select one)
-                if len(current_state) == self.state_dim:
-                    self.prev_state = current_state 
+                # Update previous version for next iteration (but not action since we didn't select one)
+                if len(current_version) == self.version_dim:
+                    self.prev_version = current_version 
                 self.prev_diversity = current_diversity if current_diversity is not None else self.prev_diversity
                 
                 # Increment step counter
                 self.steps_done += 1
                 
-                return state_rewards
+                return version_rewards
             
             # CHECK FOR STABILITY CONDITION - If diversity ratio is above threshold,
             # skip RL updates and just apply the existing PID parameters
@@ -873,28 +873,28 @@ class RLPIDController(RewardController):
                         f"Reward Scale: {self.reward_scale:.1f}")
                 
                 # Skip RL learning when diversity is good, just apply PID control
-                state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
+                version_rewards, total_rewards = self.update_rewards_using_pid(agents, current_versions, version_rewards)
                 self.prev_total_rewards = total_rewards
                 
-                # Update previous state for next iteration (but not action since we didn't select one)
-                if len(current_state) == self.state_dim:
-                    self.prev_state = current_state 
+                # Update previous version for next iteration (but not action since we didn't select one)
+                if len(current_version) == self.version_dim:
+                    self.prev_version = current_version 
                 self.prev_diversity = current_diversity if current_diversity is not None else self.prev_diversity
                 
                 # Increment step counter
                 self.steps_done += 1
                 
-                return state_rewards
+                return version_rewards
             
-            # If this is the first call or states changed, just store the initial state
-            if self.prev_state is None or states_changed:
-                self.prev_state = current_state
+            # If this is the first call or versions changed, just store the initial version
+            if self.prev_version is None or versions_changed:
+                self.prev_version = current_version
                 self.prev_diversity = current_diversity if current_diversity is not None else 0
                 # For the first step, use a default action (zero adjustment)
                 actions = np.zeros(self.action_dim)
             else:
-                # Select action based on current state
-                actions = self.select_action(current_state)
+                # Select action based on current version
+                actions = self.select_action(current_version)
 
                 if hasattr(self, 'in_transition') and self.in_transition:
                 # Zero out the reward scale adjustment (last action)
@@ -907,7 +907,7 @@ class RLPIDController(RewardController):
                 # Calculate reward if diversity metrics are provided
                 if current_diversity is not None and ideal_diversity is not None:
                     # Apply PID control first to get total rewards
-                    state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
+                    version_rewards, total_rewards = self.update_rewards_using_pid(agents, current_versions, version_rewards)
                     
                     # Calculate reward based on diversity
                     reward = self.calculate_reward(current_diversity, ideal_diversity, total_rewards)
@@ -919,8 +919,8 @@ class RLPIDController(RewardController):
                     # Store experience in replay buffer - only if dimensions match to avoid warnings
                     done = False  # Not episodic in traditional sense
                     if self.prev_action is not None and len(self.prev_action) == self.action_dim:
-                        if len(self.prev_state) == self.state_dim and len(current_state) == self.state_dim:
-                            self.replay_buffer.add(self.prev_state, self.prev_action, reward, current_state, done)
+                        if len(self.prev_version) == self.version_dim and len(current_version) == self.version_dim:
+                            self.replay_buffer.add(self.prev_version, self.prev_action, reward, current_version, done)
                     
                     # Update model periodically
                     if self.steps_done % self.update_frequency == 0 and len(self.replay_buffer) >= self.batch_size:
@@ -943,7 +943,7 @@ class RLPIDController(RewardController):
                         self.best_reward_scale = self.reward_scale
                 else:
                     # No diversity metrics available, just apply PID control
-                    state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
+                    version_rewards, total_rewards = self.update_rewards_using_pid(agents, current_versions, version_rewards)
                     self.prev_total_rewards = total_rewards
             
             # Print PID parameters and performance metrics periodically
@@ -956,34 +956,34 @@ class RLPIDController(RewardController):
                     
                 print(f"PID params: P={self.p_param:.1f}, I={self.i_param:.1f}, D={self.d_param:.1f}, Scale={self.reward_scale:.1f} | {p_dist}")
             
-            # Update previous state and action for next iteration
-            # Only update prev_state if dimensions are compatible
-            if len(current_state) == self.state_dim:
-                self.prev_state = current_state 
+            # Update previous version and action for next iteration
+            # Only update prev_version if dimensions are compatible
+            if len(current_version) == self.version_dim:
+                self.prev_version = current_version 
             self.prev_action = actions
             self.prev_diversity = current_diversity if current_diversity is not None else self.prev_diversity
             
             # Increment step counter
             self.steps_done += 1
             
-            return state_rewards
+            return version_rewards
             
         except Exception as e:
             print(f"Error in update_rewards: {e}")
             import traceback
             traceback.print_exc()
-            # If there's an error, return unchanged state rewards
-            return state_rewards
+            # If there's an error, return unchanged version rewards
+            return version_rewards
             
-            # If this is the first call or states changed, just store the initial state
-            if self.prev_state is None or states_changed:
-                self.prev_state = current_state
+            # If this is the first call or versions changed, just store the initial version
+            if self.prev_version is None or versions_changed:
+                self.prev_version = current_version
                 self.prev_diversity = current_diversity if current_diversity is not None else 0
                 # For the first step, use a default action (zero adjustment)
                 actions = np.zeros(self.action_dim)
             else:
-                # Select action based on current state
-                actions = self.select_action(current_state)
+                # Select action based on current version
+                actions = self.select_action(current_version)
                 
                 # Apply the selected actions to adjust parameters
                 self.apply_actions_to_pid_parameters(actions)
@@ -991,7 +991,7 @@ class RLPIDController(RewardController):
                 # Calculate reward if diversity metrics are provided
                 if current_diversity is not None and ideal_diversity is not None:
                     # Apply PID control first to get total rewards
-                    state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
+                    version_rewards, total_rewards = self.update_rewards_using_pid(agents, current_versions, version_rewards)
                     
                     # Calculate reward based on diversity
                     reward = self.calculate_reward(current_diversity, ideal_diversity, total_rewards)
@@ -1003,8 +1003,8 @@ class RLPIDController(RewardController):
                     # Store experience in replay buffer - only if dimensions match to avoid warnings
                     done = False  # Not episodic in traditional sense
                     if self.prev_action is not None and len(self.prev_action) == self.action_dim:
-                        if len(self.prev_state) == self.state_dim and len(current_state) == self.state_dim:
-                            self.replay_buffer.add(self.prev_state, self.prev_action, reward, current_state, done)
+                        if len(self.prev_version) == self.version_dim and len(current_version) == self.version_dim:
+                            self.replay_buffer.add(self.prev_version, self.prev_action, reward, current_version, done)
                     
                     # Update model periodically
                     if self.steps_done % self.update_frequency == 0 and len(self.replay_buffer) >= self.batch_size:
@@ -1029,7 +1029,7 @@ class RLPIDController(RewardController):
                             f"Scale={self.reward_scale:.1f} (diversity ratio: {diversity_ratio:.3f})")
                 else:
                     # No diversity metrics available, just apply PID control
-                    state_rewards, total_rewards = self.update_rewards_using_pid(agents, current_states, state_rewards)
+                    version_rewards, total_rewards = self.update_rewards_using_pid(agents, current_versions, version_rewards)
                     self.prev_total_rewards = total_rewards
             
             # Print PID parameters and performance metrics periodically
@@ -1042,21 +1042,21 @@ class RLPIDController(RewardController):
                     
                 print(f"PID params: P={self.p_param:.1f}, I={self.i_param:.1f}, D={self.d_param:.1f}, Scale={self.reward_scale:.1f} | {p_dist}")
             
-            # Update previous state and action for next iteration
-            # Only update prev_state if dimensions are compatible
-            if len(current_state) == self.state_dim:
-                self.prev_state = current_state 
+            # Update previous version and action for next iteration
+            # Only update prev_version if dimensions are compatible
+            if len(current_version) == self.version_dim:
+                self.prev_version = current_version 
             self.prev_action = actions
             self.prev_diversity = current_diversity if current_diversity is not None else self.prev_diversity
             
             # Increment step counter
             self.steps_done += 1
             
-            return state_rewards
+            return version_rewards
             
         except Exception as e:
             print(f"Error in update_rewards: {e}")
             import traceback
             traceback.print_exc()
-            # If there's an error, return unchanged state rewards
-            return state_rewards
+            # If there's an error, return unchanged version rewards
+            return version_rewards
