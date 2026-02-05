@@ -261,5 +261,3 @@ Key metrics printed during runs:
 - **Version distribution**: Percentage of validators on each client
 
 Plots generated include diversity over time, reward allocation per version, and agent distribution.
-
-**Plots not displaying:** On headless servers, matplotlib saves to files instead. Check the working directory for PNG files.
